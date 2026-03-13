@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -248,6 +249,116 @@ func (h *Handler) GetIPCheck(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+func (h *Handler) CreateCloneInvite(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+
+	var payload struct {
+		IncludePhotos bool `json:"include_photos"`
+		ExpiresHours  int  `json:"expires_hours"`
+		MaxUses       int  `json:"max_uses"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid clone invite payload"})
+		return
+	}
+	if payload.ExpiresHours <= 0 {
+		payload.ExpiresHours = 72
+	}
+	if payload.ExpiresHours > (24 * 30) {
+		payload.ExpiresHours = 24 * 30
+	}
+	if payload.MaxUses <= 0 {
+		payload.MaxUses = 1
+	}
+	if payload.MaxUses > 10 {
+		payload.MaxUses = 10
+	}
+
+	inviteToken, tokenHash, err := generateInviteTokenAndHash()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invite token"})
+		return
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Duration(payload.ExpiresHours) * time.Hour)
+	invite, err := h.DB.CreateCloneInvite(ownerKey, tokenHash, payload.IncludePhotos, expiresAt, payload.MaxUses)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"invite_token":   inviteToken,
+		"include_photos": invite.IncludePhotos,
+		"expires_at":     invite.ExpiresAt,
+		"max_uses":       invite.MaxUses,
+		"used_count":     invite.UsedCount,
+	})
+}
+
+func (h *Handler) AcceptCloneInvite(c *gin.Context) {
+	targetOwnerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+
+	var payload struct {
+		InviteToken string `json:"invite_token"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid clone accept payload"})
+		return
+	}
+	token := strings.TrimSpace(payload.InviteToken)
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invite token is required"})
+		return
+	}
+
+	invite, err := h.DB.GetCloneInviteByTokenHash(hashInviteToken(token))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "invite not found"})
+		return
+	}
+	if invite.Revoked {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invite was revoked"})
+		return
+	}
+	if invite.UsedCount >= invite.MaxUses {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invite has already been used"})
+		return
+	}
+	if time.Now().UTC().After(invite.ExpiresAt) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invite has expired"})
+		return
+	}
+	if invite.OwnerKey == targetOwnerKey {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot clone your own map with this invite"})
+		return
+	}
+
+	if err := h.DB.ConsumeCloneInvite(invite.ID); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invite is no longer valid"})
+		return
+	}
+
+	clonedCount, err := h.DB.ClonePinsToOwner(invite.OwnerKey, targetOwnerKey, invite.IncludePhotos)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":         fmt.Sprintf("Cloned %d pin(s)", clonedCount),
+		"cloned_count":    clonedCount,
+		"include_photos":  invite.IncludePhotos,
+		"source_owner_key": invite.OwnerKey,
+	})
 }
 
 func (h *Handler) verifyGoogleCredential(ctx context.Context, credential string) (string, error) {
@@ -735,4 +846,18 @@ func lookupHostName(ip string) string {
 		return ""
 	}
 	return strings.TrimSuffix(names[0], ".")
+}
+
+func generateInviteTokenAndHash() (string, string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", err
+	}
+	token := base64.RawURLEncoding.EncodeToString(b)
+	return token, hashInviteToken(token), nil
+}
+
+func hashInviteToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", sum)
 }

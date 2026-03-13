@@ -37,6 +37,10 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         Slideshow
       </button>
+      <button class="btn btn-ghost admin-only-action" id="cloneBtn" onclick="showCloneModal()" title="Create or accept map clone invite">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 8h12v12H8zM4 4h12v2H6v10H4z"/></svg>
+        Clone
+      </button>
       <button class="btn btn-ghost admin-only-action" id="importBtn" onclick="showImportModal()" title="Import Google Maps JSON">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
         Import
@@ -218,6 +222,37 @@
         <button type="submit" class="btn btn-primary">Login</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ===== CLONE MODAL ===== -->
+<div class="modal-overlay" id="cloneModal">
+  <div class="modal glass clone-modal">
+    <div class="modal-header">
+      <h3>🧬 Clone Map</h3>
+      <button class="modal-close" onclick="closeCloneModal()">✕</button>
+    </div>
+
+    <div class="clone-section">
+      <h4>Create Invite</h4>
+      <p class="clone-help">Share this token with someone you trust so they can copy your map.</p>
+      <div class="form-group">
+        <label class="clone-checkbox"><input type="checkbox" id="cloneIncludePhotos" /> Include photos in clone</label>
+      </div>
+      <div class="form-group">
+        <label>Invite Expires (Hours)</label>
+        <input type="number" id="cloneExpiresHours" min="1" max="720" value="72" />
+      </div>
+      <button class="btn btn-primary" type="button" onclick="createCloneInvite()">Create Invite Token</button>
+      <textarea id="cloneInviteToken" rows="2" readonly placeholder="Invite token appears here"></textarea>
+    </div>
+
+    <div class="clone-section clone-section-accept">
+      <h4>Accept Invite</h4>
+      <p class="clone-help">Paste a token to copy someone else's map into your account.</p>
+      <textarea id="cloneAcceptToken" rows="2" placeholder="Paste invite token"></textarea>
+      <button class="btn btn-ghost" type="button" onclick="acceptCloneInvite()">Accept & Clone</button>
+    </div>
   </div>
 </div>
 

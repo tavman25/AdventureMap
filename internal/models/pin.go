@@ -48,3 +48,15 @@ type AuthEvent struct {
 	FailureReason string    `json:"failure_reason"`
 	CreatedAt     time.Time `json:"created_at"`
 }
+
+// CloneInvite represents a one-time map clone invitation.
+type CloneInvite struct {
+	ID            int64     `json:"id"`
+	OwnerKey      string    `json:"owner_key"`
+	IncludePhotos bool      `json:"include_photos"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	MaxUses       int       `json:"max_uses"`
+	UsedCount     int       `json:"used_count"`
+	Revoked       bool      `json:"revoked"`
+	CreatedAt     time.Time `json:"created_at"`
+}

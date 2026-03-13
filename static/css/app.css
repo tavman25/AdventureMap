@@ -580,6 +580,51 @@ html, body {
   background: var(--border);
 }
 
+.clone-modal {
+  max-width: 640px;
+}
+
+.clone-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: rgba(255,255,255,0.03);
+}
+
+.clone-section h4 {
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+
+.clone-help {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-bottom: 10px;
+}
+
+.clone-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+#cloneInviteToken,
+#cloneAcceptToken {
+  width: 100%;
+  margin-top: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-family: 'Consolas', monospace;
+  resize: vertical;
+}
+
 /* ===== IMPORT MODAL ===== */
 .import-instructions {
   background: rgba(124,131,255,0.08);

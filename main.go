@@ -89,6 +89,8 @@ func main() {
 		admin := api.Group("")
 		admin.Use(h.RequireAdmin())
 		{
+			admin.POST("/clone/invites", h.CreateCloneInvite)
+			admin.POST("/clone/accept", h.AcceptCloneInvite)
 			admin.POST("/pins", h.CreatePin)
 			admin.PUT("/pins/:id", h.UpdatePin)
 			admin.DELETE("/pins/:id", h.DeletePin)

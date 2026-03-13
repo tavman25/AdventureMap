@@ -95,6 +95,30 @@ func (db *DB) migrate() error {
 		log.Printf("migration auth_events index error: %v", err)
 		return err
 	}
+
+	_, err = db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS clone_invites (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			token_hash     TEXT    NOT NULL UNIQUE,
+			owner_key      TEXT    NOT NULL,
+			include_photos INTEGER NOT NULL DEFAULT 0,
+			expires_at      DATETIME NOT NULL,
+			max_uses       INTEGER NOT NULL DEFAULT 1,
+			used_count     INTEGER NOT NULL DEFAULT 0,
+			revoked        INTEGER NOT NULL DEFAULT 0,
+			created_at     DATETIME NOT NULL
+		);
+	`)
+	if err != nil {
+		log.Printf("migration clone_invites error: %v", err)
+		return err
+	}
+
+	_, err = db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_clone_invites_owner_key ON clone_invites(owner_key, created_at DESC)`)
+	if err != nil {
+		log.Printf("migration clone_invites index error: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -376,6 +400,134 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+// CreateCloneInvite stores a new clone invitation.
+func (db *DB) CreateCloneInvite(ownerKey, tokenHash string, includePhotos bool, expiresAt time.Time, maxUses int) (*models.CloneInvite, error) {
+	if maxUses <= 0 {
+		maxUses = 1
+	}
+	now := time.Now().UTC()
+	result, err := db.conn.Exec(`
+		INSERT INTO clone_invites (token_hash, owner_key, include_photos, expires_at, max_uses, used_count, revoked, created_at)
+		VALUES (?, ?, ?, ?, ?, 0, 0, ?)
+	`, tokenHash, ownerKey, boolToInt(includePhotos), expiresAt.UTC().Format(time.RFC3339), maxUses, now.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return &models.CloneInvite{
+		ID:            id,
+		OwnerKey:      ownerKey,
+		IncludePhotos: includePhotos,
+		ExpiresAt:     expiresAt.UTC(),
+		MaxUses:       maxUses,
+		UsedCount:     0,
+		Revoked:       false,
+		CreatedAt:     now,
+	}, nil
+}
+
+// GetCloneInviteByTokenHash returns a clone invite by token hash.
+func (db *DB) GetCloneInviteByTokenHash(tokenHash string) (*models.CloneInvite, error) {
+	row := db.conn.QueryRow(`
+		SELECT id, owner_key, include_photos, expires_at, max_uses, used_count, revoked, created_at
+		FROM clone_invites
+		WHERE token_hash = ?
+	`, tokenHash)
+
+	var invite models.CloneInvite
+	var includePhotos, revoked int
+	var expiresAt, createdAt string
+	if err := row.Scan(&invite.ID, &invite.OwnerKey, &includePhotos, &expiresAt, &invite.MaxUses, &invite.UsedCount, &revoked, &createdAt); err != nil {
+		return nil, err
+	}
+	invite.IncludePhotos = includePhotos == 1
+	invite.Revoked = revoked == 1
+	invite.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+	invite.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	return &invite, nil
+}
+
+// ConsumeCloneInvite increments used count if the invite is still valid.
+func (db *DB) ConsumeCloneInvite(id int64) error {
+	result, err := db.conn.Exec(`
+		UPDATE clone_invites
+		SET used_count = used_count + 1
+		WHERE id = ?
+		  AND revoked = 0
+		  AND used_count < max_uses
+		  AND expires_at > ?
+	`, id, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// ClonePinsToOwner copies all pins from one owner to another.
+func (db *DB) ClonePinsToOwner(sourceOwnerKey, targetOwnerKey string, includePhotos bool) (int, error) {
+	rows, err := db.conn.Query(`
+		SELECT title, description, image_url, latitude, longitude, color, icon, visited_at
+		FROM pins
+		WHERE owner_key = ?
+		ORDER BY created_at DESC
+	`, sourceOwnerKey)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO pins (owner_key, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	count := 0
+	for rows.Next() {
+		var title, description, imageURL, color, icon, visitedAt string
+		var latitude, longitude float64
+		if err := rows.Scan(&title, &description, &imageURL, &latitude, &longitude, &color, &icon, &visitedAt); err != nil {
+			tx.Rollback()
+			return count, err
+		}
+		if !includePhotos {
+			imageURL = ""
+		}
+		if _, err := stmt.Exec(targetOwnerKey, title, description, imageURL, latitude, longitude, color, icon, visitedAt, now, now); err != nil {
+			tx.Rollback()
+			return count, err
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		tx.Rollback()
+		return count, err
+	}
+	if err := tx.Commit(); err != nil {
+		return count, err
+	}
+	return count, nil
 }
 
 func normalizeStoredImageURLs(raw string) string {

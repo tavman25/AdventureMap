@@ -307,6 +307,28 @@ async function deletePin(id) {
   if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed to delete pin'); }
 }
 
+async function createCloneInviteRequest(payload) {
+  const res = await fetch('/api/clone/invites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to create clone invite');
+  return data;
+}
+
+async function acceptCloneInviteRequest(inviteToken) {
+  const res = await fetch('/api/clone/accept', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ invite_token: inviteToken }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to accept clone invite');
+  return data;
+}
+
 // ─── Load & Render ───────────────────────────────────────────
 async function loadPins() {
   try {
@@ -619,6 +641,48 @@ function showImportModal() {
   openModal('importModal');
 }
 function closeImportModal() { closeModal('importModal'); }
+
+function showCloneModal() {
+  if (!requireAdminAccess()) return;
+  openModal('cloneModal');
+}
+
+function closeCloneModal() {
+  closeModal('cloneModal');
+}
+
+async function createCloneInvite() {
+  if (!requireAdminAccess()) return;
+  const includePhotos = document.getElementById('cloneIncludePhotos').checked;
+  const expiresHours = parseInt(document.getElementById('cloneExpiresHours').value, 10) || 72;
+  try {
+    const result = await createCloneInviteRequest({ include_photos: includePhotos, expires_hours: expiresHours, max_uses: 1 });
+    const tokenField = document.getElementById('cloneInviteToken');
+    tokenField.value = result.invite_token || '';
+    tokenField.focus();
+    tokenField.select();
+    showToast('Clone invite created. Share the token safely.', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function acceptCloneInvite() {
+  if (!requireAdminAccess()) return;
+  const token = document.getElementById('cloneAcceptToken').value.trim();
+  if (!token) {
+    showToast('Paste an invite token first', 'error');
+    return;
+  }
+  try {
+    const result = await acceptCloneInviteRequest(token);
+    await loadPins();
+    document.getElementById('cloneAcceptToken').value = '';
+    showToast(result.message || 'Map cloned successfully', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
 
 function handleFileDrop(e) {
   e.preventDefault();
@@ -1228,6 +1292,7 @@ function closeModal(id) {
 
 function handleEscKey(e) {
   if (e.key === 'Escape') {
+    closeCloneModal();
     closeAuthModal();
     closePinModal();
     closeImportModal();
@@ -1251,6 +1316,7 @@ function handleEscKey(e) {
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) {
+      closeCloneModal();
       closeAuthModal();
       closePinModal();
       closeImportModal();
