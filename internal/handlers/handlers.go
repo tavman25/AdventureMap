@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,13 +23,91 @@ import (
 
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
-	DB        *database.DB
-	UploadDir string
+	DB            *database.DB
+	UploadDir     string
+	AdminPassword string
+	AuthSecret    string
 }
 
 // New creates a new Handler.
-func New(db *database.DB, uploadDir string) *Handler {
-	return &Handler{DB: db, UploadDir: uploadDir}
+func New(db *database.DB, uploadDir, adminPassword, authSecret string) *Handler {
+	return &Handler{DB: db, UploadDir: uploadDir, AdminPassword: adminPassword, AuthSecret: authSecret}
+}
+
+func (h *Handler) authEnabled() bool {
+	return strings.TrimSpace(h.AdminPassword) != ""
+}
+
+func (h *Handler) adminCookieName() string {
+	return "travel_map_admin"
+}
+
+func (h *Handler) authCookieValue() string {
+	mac := hmac.New(sha256.New, []byte(h.AuthSecret))
+	mac.Write([]byte(h.AdminPassword))
+	return fmt.Sprintf("%x", mac.Sum(nil))
+}
+
+func (h *Handler) hasAdminCookie(c *gin.Context) bool {
+	if !h.authEnabled() {
+		return true
+	}
+	cookie, err := c.Cookie(h.adminCookieName())
+	if err != nil {
+		return false
+	}
+	expected := h.authCookieValue()
+	if len(cookie) != len(expected) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookie), []byte(expected)) == 1
+}
+
+func (h *Handler) RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.hasAdminCookie(c) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "admin login required"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func (h *Handler) GetAuthStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"auth_enabled": h.authEnabled(),
+		"is_admin":     h.hasAdminCookie(c),
+	})
+}
+
+func (h *Handler) Login(c *gin.Context) {
+	if !h.authEnabled() {
+		c.JSON(http.StatusOK, gin.H{"message": "auth disabled", "is_admin": true})
+		return
+	}
+
+	var payload struct {
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid login payload"})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(payload.Password), []byte(h.AdminPassword)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid password"})
+		return
+	}
+
+	secureCookie := c.Request.TLS != nil
+	c.SetCookie(h.adminCookieName(), h.authCookieValue(), 60*60*24*14, "/", "", secureCookie, true)
+	c.JSON(http.StatusOK, gin.H{"message": "logged in", "is_admin": true})
+}
+
+func (h *Handler) Logout(c *gin.Context) {
+	secureCookie := c.Request.TLS != nil
+	c.SetCookie(h.adminCookieName(), "", -1, "/", "", secureCookie, true)
+	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 
 // GetPins returns all pins as JSON.

@@ -23,6 +23,8 @@ func main() {
 	port := getEnv("PORT", "8080")
 	dbPath := getEnv("DB_PATH", "./data/travel.db")
 	uploadDir := getEnv("UPLOAD_DIR", filepath.Join(filepath.Dir(dbPath), "uploads"))
+	adminPassword := getEnv("ADMIN_PASSWORD", "")
+	authSecret := getEnv("AUTH_SECRET", "travel-map-auth-secret")
 	ginMode := getEnv("GIN_MODE", "release")
 
 	gin.SetMode(ginMode)
@@ -50,7 +52,7 @@ func main() {
 	}
 
 	// Initialize handlers
-	h := handlers.New(db, uploadDir)
+	h := handlers.New(db, uploadDir, adminPassword, authSecret)
 
 	// Set up router
 	r := gin.New()
@@ -67,14 +69,23 @@ func main() {
 	// REST API routes
 	api := r.Group("/api")
 	{
+		api.GET("/auth/status", h.GetAuthStatus)
+		api.POST("/auth/login", h.Login)
+		api.POST("/auth/logout", h.Logout)
+
 		api.GET("/pins", h.GetPins)
 		api.GET("/pins/:id", h.GetPin)
-		api.POST("/pins", h.CreatePin)
-		api.PUT("/pins/:id", h.UpdatePin)
-		api.DELETE("/pins/:id", h.DeletePin)
-		api.POST("/import/googlemaps", h.ImportGoogleMaps)
-		api.POST("/import/photos", h.ImportPinPhotos)
-		api.POST("/upload/image", h.UploadImage)
+
+		admin := api.Group("")
+		admin.Use(h.RequireAdmin())
+		{
+			admin.POST("/pins", h.CreatePin)
+			admin.PUT("/pins/:id", h.UpdatePin)
+			admin.DELETE("/pins/:id", h.DeletePin)
+			admin.POST("/import/googlemaps", h.ImportGoogleMaps)
+			admin.POST("/import/photos", h.ImportPinPhotos)
+			admin.POST("/upload/image", h.UploadImage)
+		}
 	}
 
 	// Serve uploaded images from disk.

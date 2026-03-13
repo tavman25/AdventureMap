@@ -17,8 +17,14 @@ const state = {
   countryLookupInFlight: {},
   statsRunId: 0,
   lightboxImages: [],
+  lightboxImageTitles: [],
   lightboxIndex: 0,
   lightboxTitleBase: 'Photo',
+  slideshowActive: false,
+  slideshowTimerId: null,
+  slideshowDelayMs: 5000,
+  authEnabled: false,
+  isAdmin: false,
 };
 
 const COUNTRY_CACHE_KEY = 'travel-map-country-cache-v1';
@@ -232,10 +238,10 @@ function buildPopupHTML(pin) {
       </button>` : ''}
       ${pin.description ? `<p class="popup-desc">${escapeHTML(pin.description)}</p>` : ''}
       <div class="popup-meta">${meta}</div>
-      <div class="popup-actions">
+      ${state.isAdmin ? `<div class="popup-actions">
         <button class="btn btn-ghost" onclick="editPinById(${pin.id})">✏️ Edit</button>
         <button class="btn btn-danger" onclick="deletePinById(${pin.id})">🗑 Delete</button>
-      </div>
+      </div>` : ''}
     </div>`;
 }
 
@@ -255,6 +261,14 @@ function removeMarkerFromMap(id) {
     clusterGroup.removeLayer(state.markers[id]);
     delete state.markers[id];
   }
+}
+
+function refreshMarkerPopups() {
+  state.pins.forEach((pin) => {
+    const marker = state.markers[pin.id];
+    if (!marker) return;
+    marker.setPopupContent(buildPopupHTML(pin));
+  });
 }
 
 // ─── API Calls ───────────────────────────────────────────────
@@ -319,11 +333,19 @@ function renderSidebarPinList(pins) {
         <div class="pin-card-title">${escapeHTML(p.title)}</div>
         <div class="pin-card-meta">${p.visited_at || `${parseFloat(p.latitude).toFixed(2)}, ${parseFloat(p.longitude).toFixed(2)}`}</div>
       </div>
-      <div class="pin-card-actions">
+      ${state.isAdmin ? `<div class="pin-card-actions">
         <button title="Edit" onclick="event.stopPropagation(); editPinById(${p.id})">✏️</button>
         <button title="Delete" class="delete" onclick="event.stopPropagation(); deletePinById(${p.id})">🗑</button>
-      </div>
+      </div>` : ''}
     </div>`).join('');
+}
+
+function requireAdminAccess() {
+  if (!state.authEnabled) return true;
+  if (state.isAdmin) return true;
+  openModal('authModal');
+  showToast('Admin login required for changes', 'error');
+  return false;
 }
 
 function setVisibleMarkers(pinsToShow) {
@@ -456,6 +478,7 @@ function highlightSidebarCard(id) {
 
 // ─── Add/Edit Pin Modal ───────────────────────────────────────
 function showAddModal(lat, lng) {
+  if (!requireAdminAccess()) return;
   state.editingId = null;
   state.addClickMode = false;
   state.pendingPickDraft = null;
@@ -476,6 +499,7 @@ function showAddModal(lat, lng) {
 }
 
 function editPinById(id) {
+  if (!requireAdminAccess()) return;
   const pin = state.pins.find(p => p.id === id);
   if (!pin) return;
   state.editingId = id;
@@ -548,6 +572,7 @@ async function savePin(e) {
 }
 
 async function deletePinById(id) {
+  if (!requireAdminAccess()) return;
   const pin = state.pins.find(p => p.id === id);
   if (!pin) return;
   if (!confirm(`Remove "${pin.title}" from your map?`)) return;
@@ -574,7 +599,10 @@ function setColor(hex) {
 }
 
 // ─── Import Modal ─────────────────────────────────────────────
-function showImportModal() { openModal('importModal'); }
+function showImportModal() {
+  if (!requireAdminAccess()) return;
+  openModal('importModal');
+}
 function closeImportModal() { closeModal('importModal'); }
 
 function handleFileDrop(e) {
@@ -638,6 +666,7 @@ async function submitPhotoImport() {
 }
 
 async function uploadPinImageFromDevice(event) {
+  if (!requireAdminAccess()) return;
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
 
@@ -675,6 +704,7 @@ async function uploadPinImageFromDevice(event) {
 }
 
 function addImageURLToPinList() {
+  if (!requireAdminAccess()) return;
   const input = document.getElementById('pinImageUrl');
   const toAdd = parseImageURLList(input.value);
   if (!toAdd.length) {
@@ -752,6 +782,7 @@ function openGalleryForPin(id) {
   }
 
   state.lightboxImages = images;
+  state.lightboxImageTitles = images.map(() => pin.title);
   state.lightboxTitleBase = pin.title;
   state.lightboxIndex = 0;
 
@@ -783,9 +814,11 @@ function setLightboxImage(index) {
   const title = document.getElementById('lightboxTitle');
   const counter = document.getElementById('lightboxCounter');
 
+  const imageTitle = state.lightboxImageTitles[normalizedIndex] || state.lightboxTitleBase;
+
   image.src = state.lightboxImages[normalizedIndex];
-  image.alt = `${state.lightboxTitleBase} photo ${normalizedIndex + 1}`;
-  title.textContent = `${state.lightboxTitleBase} - Photo ${normalizedIndex + 1}`;
+  image.alt = `${imageTitle} photo ${normalizedIndex + 1}`;
+  title.textContent = `${imageTitle} - Photo ${normalizedIndex + 1}`;
   counter.textContent = `${normalizedIndex + 1} / ${total}`;
 }
 
@@ -794,6 +827,7 @@ function openLightboxModal(indexOrUrl = 0, title = 'Photo', index = 1) {
     const normalized = normalizeImageURL(indexOrUrl);
     if (!normalized) return;
     state.lightboxImages = [normalized];
+    state.lightboxImageTitles = [title || 'Photo'];
     state.lightboxTitleBase = title || 'Photo';
     state.lightboxIndex = Math.max(0, Number(index) - 1);
   } else {
@@ -823,12 +857,222 @@ function showPreviousLightboxImage() {
 }
 
 function closeLightboxModal() {
+  stopSlideshowPlayback();
   document.getElementById('lightboxImage').src = '';
   document.getElementById('lightboxCounter').textContent = '1 / 1';
   state.lightboxImages = [];
+  state.lightboxImageTitles = [];
   state.lightboxIndex = 0;
   state.lightboxTitleBase = 'Photo';
   closeModal('lightboxModal');
+}
+
+async function fetchAuthStatus() {
+  const res = await fetch('/api/auth/status', { method: 'GET' });
+  if (!res.ok) throw new Error('Failed to load auth status');
+  return res.json();
+}
+
+async function loginAdmin(password) {
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Login failed');
+  return data;
+}
+
+async function logoutAdmin() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+}
+
+function updateAuthUI() {
+  const authBtn = document.getElementById('authBtn');
+  if (authBtn) {
+    if (!state.authEnabled) {
+      authBtn.style.display = 'none';
+    } else if (state.isAdmin) {
+      authBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1a5 5 0 00-5 5v3H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 8V6a3 3 0 016 0v3H9z"/></svg> Logout';
+      authBtn.title = 'Logout admin';
+    } else {
+      authBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1a5 5 0 00-5 5v3H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 8V6a3 3 0 016 0v3H9z"/></svg> Admin Login';
+      authBtn.title = 'Admin login';
+    }
+  }
+
+  renderSidebarPinList(state.pins);
+  refreshMarkerPopups();
+}
+
+async function initAuthState() {
+  try {
+    const status = await fetchAuthStatus();
+    state.authEnabled = !!status.auth_enabled;
+    state.isAdmin = !!status.is_admin;
+  } catch {
+    state.authEnabled = false;
+    state.isAdmin = false;
+  }
+  updateAuthUI();
+}
+
+function handleAuthButtonClick() {
+  if (!state.authEnabled) return;
+  if (state.isAdmin) {
+    void (async () => {
+      await logoutAdmin();
+      state.isAdmin = false;
+      updateAuthUI();
+      showToast('Logged out', 'success');
+    })();
+    return;
+  }
+  openModal('authModal');
+}
+
+function closeAuthModal() {
+  closeModal('authModal');
+  const form = document.getElementById('authForm');
+  if (form) form.reset();
+}
+
+async function submitAdminLogin(event) {
+  event.preventDefault();
+  const password = document.getElementById('adminPassword').value;
+  try {
+    await loginAdmin(password);
+    state.isAdmin = true;
+    updateAuthUI();
+    closeAuthModal();
+    showToast('Admin access enabled', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function buildGlobalSlideshowPool() {
+  const pool = [];
+  state.pins.forEach((pin) => {
+    const images = getPinImages(pin);
+    images.forEach((url) => {
+      pool.push({ url, title: pin.title || 'Photo' });
+    });
+  });
+  return pool;
+}
+
+function shuffleArray(items) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = copy[i];
+    copy[i] = copy[j];
+    copy[j] = tmp;
+  }
+  return copy;
+}
+
+function startSlideshowTimer() {
+  if (state.slideshowTimerId) {
+    clearInterval(state.slideshowTimerId);
+    state.slideshowTimerId = null;
+  }
+  state.slideshowTimerId = setInterval(() => {
+    if (!state.slideshowActive || !isModalOpen('lightboxModal')) return;
+    showNextLightboxImage();
+  }, state.slideshowDelayMs);
+}
+
+function stopSlideshowTimer() {
+  if (!state.slideshowTimerId) return;
+  clearInterval(state.slideshowTimerId);
+  state.slideshowTimerId = null;
+}
+
+function updateSlideshowControls() {
+  const headerBtn = document.getElementById('slideshowBtn');
+  if (headerBtn) {
+    headerBtn.innerHTML = state.slideshowActive
+      ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 6h12v12H6z"/></svg> Stop Show'
+      : '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Slideshow';
+  }
+  const stopBtn = document.getElementById('slideshowStopBtn');
+  if (stopBtn) {
+    stopBtn.style.display = state.slideshowActive ? 'inline-flex' : 'none';
+  }
+}
+
+async function requestSlideshowFullscreen() {
+  const target = document.getElementById('lightboxModal') || document.documentElement;
+  if (!target || document.fullscreenElement) return;
+
+  const request = target.requestFullscreen
+    || target.webkitRequestFullscreen
+    || target.mozRequestFullScreen
+    || target.msRequestFullscreen;
+  if (!request) return;
+
+  try {
+    await request.call(target);
+  } catch {
+    // Fullscreen can fail if browser blocks user gesture chaining.
+  }
+}
+
+async function exitSlideshowFullscreen() {
+  const exit = document.exitFullscreen
+    || document.webkitExitFullscreen
+    || document.mozCancelFullScreen
+    || document.msExitFullscreen;
+  if (!exit) return;
+
+  try {
+    await exit.call(document);
+  } catch {
+    // Ignore exit failures.
+  }
+}
+
+async function startRandomSlideshow() {
+  const pool = buildGlobalSlideshowPool();
+  if (!pool.length) {
+    showToast('No photos found. Add or upload images first.', 'error');
+    return;
+  }
+
+  const randomized = shuffleArray(pool);
+  state.lightboxImages = randomized.map((item) => item.url);
+  state.lightboxImageTitles = randomized.map((item) => item.title);
+  state.lightboxTitleBase = 'Slideshow';
+  state.lightboxIndex = 0;
+  state.slideshowActive = true;
+  document.body.classList.add('slideshow-mode');
+  updateSlideshowControls();
+
+  openModal('lightboxModal');
+  setLightboxImage(0);
+  startSlideshowTimer();
+  await requestSlideshowFullscreen();
+}
+
+function toggleSlideshow() {
+  if (state.slideshowActive) {
+    closeLightboxModal();
+    return;
+  }
+  void requestSlideshowFullscreen();
+  void startRandomSlideshow();
+}
+
+function stopSlideshowPlayback() {
+  if (!state.slideshowActive && !state.slideshowTimerId) return;
+  state.slideshowActive = false;
+  document.body.classList.remove('slideshow-mode');
+  stopSlideshowTimer();
+  updateSlideshowControls();
+  void exitSlideshowFullscreen();
 }
 
 // ─── Sidebar toggle ───────────────────────────────────────────
@@ -857,6 +1101,7 @@ function closeModal(id) {
 
 function handleEscKey(e) {
   if (e.key === 'Escape') {
+    closeAuthModal();
     closePinModal();
     closeImportModal();
     closeGalleryModal();
@@ -879,6 +1124,7 @@ function handleEscKey(e) {
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) {
+      closeAuthModal();
       closePinModal();
       closeImportModal();
       closeGalleryModal();
@@ -971,4 +1217,6 @@ function getPinImages(pin) {
 
 // ─── Kick-off ─────────────────────────────────────────────────
 initSearchInput();
+updateSlideshowControls();
+void initAuthState();
 loadPins();

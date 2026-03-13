@@ -548,6 +548,10 @@ html, body {
   margin-top: 8px;
 }
 
+.auth-modal {
+  max-width: 420px;
+}
+
 /* ===== IMPORT MODAL ===== */
 .import-instructions {
   background: rgba(124,131,255,0.08);
@@ -715,6 +719,35 @@ html, body {
   width: min(92vw, 1100px);
 }
 
+body.slideshow-mode #lightboxModal {
+  background: #000;
+}
+
+body.slideshow-mode #lightboxModal .lightbox-modal {
+  width: 100vw;
+  max-width: none;
+  max-height: 100vh;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+  padding: 16px 20px;
+  background: rgba(0, 0, 0, 0.9);
+}
+
+body.slideshow-mode #lightboxModal .modal-header {
+  margin-bottom: 12px;
+}
+
+body.slideshow-mode #lightboxModal .lightbox-stage {
+  min-height: calc(100vh - 120px);
+}
+
+body.slideshow-mode #lightboxModal .lightbox-image {
+  max-height: calc(100vh - 190px);
+  border-color: rgba(255,255,255,0.16);
+  background: rgba(0,0,0,0.45);
+}
+
 .lightbox-stage {
   display: flex;
   align-items: center;
@@ -765,6 +798,17 @@ html, body {
 #lightboxCounter {
   color: var(--text);
   font-weight: 600;
+}
+
+.lightbox-meta-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lightbox-stop-btn {
+  padding: 6px 10px;
+  font-size: 0.74rem;
 }
 
 /* ===== CUSTOM PIN MARKERS ===== */
@@ -837,5 +881,14 @@ html, body {
     font-size: 1.3rem;
   }
   .lightbox-image { width: calc(100% - 88px); }
+  .lightbox-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .lightbox-meta-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
   .lightbox-hint { display: none; }
 }

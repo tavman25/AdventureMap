@@ -29,6 +29,14 @@
       <span class="stat"><span id="countryCount">0</span> Countries</span>
     </div>
     <div class="header-actions">
+      <button class="btn btn-ghost" id="authBtn" onclick="handleAuthButtonClick()" title="Admin login">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1a5 5 0 00-5 5v3H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 8V6a3 3 0 016 0v3H9z"/></svg>
+        Admin Login
+      </button>
+      <button class="btn btn-ghost" id="slideshowBtn" onclick="toggleSlideshow()" title="Start random fullscreen slideshow">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        Slideshow
+      </button>
       <button class="btn btn-ghost" onclick="showImportModal()" title="Import Google Maps JSON">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
         Import
@@ -189,6 +197,26 @@
   </div>
 </div>
 
+<!-- ===== AUTH MODAL ===== -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal glass auth-modal">
+    <div class="modal-header">
+      <h3>🔐 Admin Login</h3>
+      <button class="modal-close" onclick="closeAuthModal()">✕</button>
+    </div>
+    <form id="authForm" onsubmit="submitAdminLogin(event)">
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="adminPassword" autocomplete="current-password" placeholder="Enter admin password" required />
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeAuthModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Login</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ===== TOAST ===== -->
 <div id="toast" class="toast"></div>
 
@@ -216,7 +244,10 @@
     </div>
     <div class="lightbox-meta">
       <span id="lightboxCounter">1 / 1</span>
-      <span class="lightbox-hint">Use arrow keys or buttons to browse photos</span>
+      <div class="lightbox-meta-actions">
+        <button type="button" id="slideshowStopBtn" class="btn btn-ghost lightbox-stop-btn" onclick="stopSlideshowPlayback()" style="display:none">Stop Slideshow</button>
+        <span class="lightbox-hint">Use arrow keys or buttons to browse photos</span>
+      </div>
     </div>
   </div>
 </div>
