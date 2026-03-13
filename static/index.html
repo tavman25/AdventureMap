@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Travel Map ✈️</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Leaflet MarkerCluster CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+  <!-- App styles -->
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<header class="app-header">
+  <div class="header-content">
+    <div class="logo">
+      <span class="logo-icon">🌍</span>
+      <span class="logo-text">Travel Map</span>
+    </div>
+    <div class="header-stats" id="headerStats">
+      <span class="stat"><span id="pinCount">0</span> Places visited</span>
+      <span class="stat-divider">·</span>
+      <span class="stat"><span id="countryCount">0</span> Countries</span>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-ghost" onclick="showImportModal()" title="Import Google Maps JSON">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+        Import
+      </button>
+      <button class="btn btn-primary" onclick="showAddModal()">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+        Add Pin
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ===== MAP ===== -->
+<div id="map"></div>
+
+<!-- ===== SIDEBAR (pin list) ===== -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <h2>📌 My Places</h2>
+    <button class="sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar">‹</button>
+  </div>
+  <div class="sidebar-search">
+    <input type="text" id="searchInput" placeholder="Search places…" oninput="filterPins(this.value)" />
+  </div>
+  <div id="pinList" class="pin-list"></div>
+</aside>
+<button class="sidebar-open-btn" id="sidebarOpenBtn" onclick="toggleSidebar()" title="Open places panel" style="display:none">›</button>
+
+<!-- ===== ADD / EDIT PIN MODAL ===== -->
+<div class="modal-overlay" id="pinModal">
+  <div class="modal glass">
+    <div class="modal-header">
+      <h3 id="modalTitle">📍 New Pin</h3>
+      <button class="modal-close" onclick="closePinModal()">✕</button>
+    </div>
+    <form id="pinForm" onsubmit="savePin(event)">
+      <input type="hidden" id="pinId" />
+      <div class="form-row">
+        <div class="form-group">
+          <label>Place Name *</label>
+          <input type="text" id="pinTitle" placeholder="e.g. Eiffel Tower" required />
+        </div>
+        <div class="form-group form-group--sm">
+          <label>Icon</label>
+          <div class="icon-picker" id="iconPicker">
+            <input type="text" id="pinIcon" value="📍" maxlength="4" />
+            <div class="icon-presets">
+              <span onclick="setIcon('📍')">📍</span>
+              <span onclick="setIcon('⭐')">⭐</span>
+              <span onclick="setIcon('❤️')">❤️</span>
+              <span onclick="setIcon('🏖️')">🏖️</span>
+              <span onclick="setIcon('🏔️')">🏔️</span>
+              <span onclick="setIcon('🏙️')">🏙️</span>
+              <span onclick="setIcon('🍽️')">🍽️</span>
+              <span onclick="setIcon('🏛️')">🏛️</span>
+              <span onclick="setIcon('🎭')">🎭</span>
+              <span onclick="setIcon('🌊')">🌊</span>
+              <span onclick="setIcon('⛪')">⛪</span>
+              <span onclick="setIcon('🎿')">🎿</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea id="pinDescription" rows="2" placeholder="What made this place special?"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Latitude</label>
+          <input type="number" id="pinLat" step="any" placeholder="48.8566" required />
+        </div>
+        <div class="form-group">
+          <label>Longitude</label>
+          <input type="number" id="pinLng" step="any" placeholder="2.3522" required />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Date Visited</label>
+          <input type="text" id="pinVisitedAt" placeholder="e.g. June 2024" />
+        </div>
+        <div class="form-group form-group--sm">
+          <label>Pin Color</label>
+          <div class="color-row">
+            <input type="color" id="pinColor" value="#FF5722" />
+            <div class="color-presets">
+              <span style="background:#FF5722" onclick="setColor('#FF5722')"></span>
+              <span style="background:#2196F3" onclick="setColor('#2196F3')"></span>
+              <span style="background:#4CAF50" onclick="setColor('#4CAF50')"></span>
+              <span style="background:#FF9800" onclick="setColor('#FF9800')"></span>
+              <span style="background:#9C27B0" onclick="setColor('#9C27B0')"></span>
+              <span style="background:#F44336" onclick="setColor('#F44336')"></span>
+              <span style="background:#00BCD4" onclick="setColor('#00BCD4')"></span>
+              <span style="background:#FFD700" onclick="setColor('#FFD700')"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="form-hint" id="coordHint">💡 Or click anywhere on the map to set coordinates</div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closePinModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Pin</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== IMPORT MODAL ===== -->
+<div class="modal-overlay" id="importModal">
+  <div class="modal glass">
+    <div class="modal-header">
+      <h3>📂 Import Google Maps Places</h3>
+      <button class="modal-close" onclick="closeImportModal()">✕</button>
+    </div>
+    <div class="import-instructions">
+      <p>Export your saved places from <strong>Google Maps Takeout</strong> or paste a GeoJSON file below.</p>
+      <ol>
+        <li>Go to <em>Google Takeout → Maps (your places)</em></li>
+        <li>Download the JSON export</li>
+        <li>Drop the file here or paste the JSON</li>
+      </ol>
+    </div>
+    <div class="drop-zone" id="dropZone"
+         ondragover="event.preventDefault(); this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="handleFileDrop(event)">
+      <span class="drop-icon">📄</span>
+      <span>Drop JSON file here</span>
+      <span class="drop-sub">or</span>
+      <label class="btn btn-ghost">
+        Browse file
+        <input type="file" id="fileInput" accept=".json" style="display:none" onchange="handleFileSelect(event)" />
+      </label>
+    </div>
+    <div class="import-or">— or paste JSON —</div>
+    <textarea id="importJson" rows="6" placeholder='{"type":"FeatureCollection","features":[...]}'></textarea>
+    <div id="importResult" class="import-result"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeImportModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitImport()">Import Pins</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TOAST ===== -->
+<div id="toast" class="toast"></div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Leaflet MarkerCluster JS -->
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<!-- App JS -->
+<script src="/js/app.js"></script>
+</body>
+</html>

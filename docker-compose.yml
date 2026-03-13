@@ -1,0 +1,26 @@
+services:
+  travel-map:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: travel-map:latest
+    container_name: travel-map
+    ports:
+      - "8080:8080"
+    volumes:
+      - travel-map-data:/app/data
+    environment:
+      - PORT=8080
+      - DB_PATH=/app/data/travel.db
+      - GIN_MODE=release
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/pins || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  travel-map-data:
+    driver: local

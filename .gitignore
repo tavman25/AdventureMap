@@ -1,0 +1,27 @@
+# Binaries
+travel-map
+travel-map.exe
+*.exe
+
+# Data (database lives here at runtime)
+data/
+
+# Go build cache
+*.test
+coverage.out
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Environment
+.env
+.env.local
