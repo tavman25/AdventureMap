@@ -78,6 +78,7 @@ func main() {
 
 		api.GET("/pins", h.GetPins)
 		api.GET("/pins/:id", h.GetPin)
+		api.GET("/profile", h.GetProfile)
 
 		superAdmin := api.Group("")
 		superAdmin.Use(h.RequireSuperAdmin())
@@ -89,6 +90,7 @@ func main() {
 		admin := api.Group("")
 		admin.Use(h.RequireAdmin())
 		{
+			admin.PUT("/profile", h.UpdateProfile)
 			admin.GET("/clone/invites", h.ListCloneInvites)
 			admin.POST("/clone/invites", h.CreateCloneInvite)
 			admin.POST("/clone/invites/:id/revoke", h.RevokeCloneInvite)

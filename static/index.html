@@ -37,6 +37,10 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         Slideshow
       </button>
+      <button class="btn btn-ghost admin-only-action" id="titleSettingsBtn" onclick="showTitleSettingsModal()" title="Customize map title">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 17.25V21h3.75l11-11.03-3.75-3.75zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75z"/></svg>
+        Rename
+      </button>
       <button class="btn btn-ghost admin-only-action" id="cloneBtn" onclick="showCloneModal()" title="Create or accept map clone invite">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 8h12v12H8zM4 4h12v2H6v10H4z"/></svg>
         Clone
@@ -220,6 +224,26 @@
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" onclick="closeAuthModal()">Cancel</button>
         <button type="submit" class="btn btn-primary">Login</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ===== TITLE SETTINGS MODAL ===== -->
+<div class="modal-overlay" id="titleSettingsModal">
+  <div class="modal glass auth-modal">
+    <div class="modal-header">
+      <h3>✏️ Map Title</h3>
+      <button class="modal-close" onclick="closeTitleSettingsModal()">✕</button>
+    </div>
+    <form id="titleSettingsForm" onsubmit="saveTitleSettings(event)">
+      <div class="form-group">
+        <label>Display Title</label>
+        <input type="text" id="mapDisplayTitle" maxlength="80" placeholder="My Travel Map" />
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" onclick="closeTitleSettingsModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Title</button>
       </div>
     </form>
   </div>

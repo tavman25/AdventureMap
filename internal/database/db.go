@@ -141,6 +141,18 @@ func (db *DB) migrate() error {
 		log.Printf("migration clone_events source index error: %v", err)
 		return err
 	}
+
+	_, err = db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS user_profiles (
+			owner_key     TEXT PRIMARY KEY,
+			display_title TEXT NOT NULL DEFAULT '',
+			updated_at    DATETIME NOT NULL
+		);
+	`)
+	if err != nil {
+		log.Printf("migration user_profiles error: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -651,6 +663,38 @@ func (db *DB) ListCloneEventsBySourceOwner(sourceOwnerKey string, limit int) ([]
 		})
 	}
 	return events, rows.Err()
+}
+
+// GetUserProfile returns the profile settings for an owner.
+func (db *DB) GetUserProfile(ownerKey string) (*models.UserProfile, error) {
+	row := db.conn.QueryRow(`
+		SELECT owner_key, display_title, updated_at
+		FROM user_profiles
+		WHERE owner_key = ?
+	`, ownerKey)
+
+	var profile models.UserProfile
+	var updatedAt string
+	if err := row.Scan(&profile.OwnerKey, &profile.DisplayTitle, &updatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return &models.UserProfile{OwnerKey: ownerKey, DisplayTitle: "", UpdatedAt: time.Time{}}, nil
+		}
+		return nil, err
+	}
+	profile.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	return &profile, nil
+}
+
+// UpsertUserProfileDisplayTitle updates or inserts the per-owner display title.
+func (db *DB) UpsertUserProfileDisplayTitle(ownerKey, displayTitle string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.conn.Exec(`
+		INSERT INTO user_profiles (owner_key, display_title, updated_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(owner_key)
+		DO UPDATE SET display_title = excluded.display_title, updated_at = excluded.updated_at
+	`, ownerKey, displayTitle, now)
+	return err
 }
 
 func normalizeStoredImageURLs(raw string) string {

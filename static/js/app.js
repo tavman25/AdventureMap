@@ -29,7 +29,11 @@ const state = {
   googleLoginEnabled: false,
   googleClientId: '',
   googleScriptLoaded: false,
+  defaultTitle: '',
+  profileTitle: '',
 };
+
+state.defaultTitle = document.querySelector('.logo-text')?.textContent || 'Travel Map';
 
 const COUNTRY_CACHE_KEY = 'travel-map-country-cache-v1';
 
@@ -327,6 +331,42 @@ async function acceptCloneInviteRequest(inviteToken) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Failed to accept clone invite');
   return data;
+}
+
+async function fetchProfile() {
+  const res = await fetch('/api/profile');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to load profile');
+  return data;
+}
+
+async function updateProfileDisplayTitle(displayTitle) {
+  const res = await fetch('/api/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_title: displayTitle }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to update title');
+  return data;
+}
+
+function applyMapTitle(title) {
+  const logoText = document.querySelector('.logo-text');
+  if (!logoText) return;
+  const finalTitle = (title || '').trim() || state.defaultTitle;
+  logoText.textContent = finalTitle;
+}
+
+async function loadProfileTitle() {
+  try {
+    const profile = await fetchProfile();
+    state.profileTitle = String(profile.display_title || '').trim();
+    applyMapTitle(state.profileTitle);
+  } catch {
+    state.profileTitle = '';
+    applyMapTitle('');
+  }
 }
 
 async function fetchCloneInvites() {
@@ -671,6 +711,32 @@ function showCloneModal() {
 
 function closeCloneModal() {
   closeModal('cloneModal');
+}
+
+function showTitleSettingsModal() {
+  if (!requireAdminAccess()) return;
+  document.getElementById('mapDisplayTitle').value = state.profileTitle || '';
+  openModal('titleSettingsModal');
+}
+
+function closeTitleSettingsModal() {
+  closeModal('titleSettingsModal');
+}
+
+async function saveTitleSettings(event) {
+  event.preventDefault();
+  if (!requireAdminAccess()) return;
+  const input = document.getElementById('mapDisplayTitle');
+  const nextTitle = input.value.trim();
+  try {
+    await updateProfileDisplayTitle(nextTitle);
+    state.profileTitle = nextTitle;
+    applyMapTitle(state.profileTitle);
+    closeTitleSettingsModal();
+    showToast('Map title updated', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
 }
 
 async function createCloneInvite() {
@@ -1166,6 +1232,8 @@ function handleAuthButtonClick() {
       state.pins = [];
       clusterGroup.clearLayers();
       state.markers = {};
+      state.profileTitle = '';
+      applyMapTitle('');
       updateAuthUI();
       renderSidebarPinList(state.pins);
       showToast('Logged out', 'success');
@@ -1190,6 +1258,7 @@ async function submitAdminLogin(event) {
     state.isAdmin = true;
     updateAuthUI();
     closeAuthModal();
+    await loadProfileTitle();
     await loadPins();
     showToast('Admin access enabled', 'success');
   } catch (err) {
@@ -1238,6 +1307,7 @@ async function ensureGoogleAuthReady() {
         state.isAdmin = true;
         updateAuthUI();
         closeAuthModal();
+        await loadProfileTitle();
         await loadPins();
         showToast('Signed in with Google', 'success');
       } catch (err) {
@@ -1408,6 +1478,7 @@ function closeModal(id) {
 
 function handleEscKey(e) {
   if (e.key === 'Escape') {
+    closeTitleSettingsModal();
     closeCloneModal();
     closeAuthModal();
     closePinModal();
@@ -1432,6 +1503,7 @@ function handleEscKey(e) {
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) {
+      closeTitleSettingsModal();
       closeCloneModal();
       closeAuthModal();
       closePinModal();
@@ -1529,6 +1601,7 @@ async function bootstrapApp() {
   initSearchInput();
   updateSlideshowControls();
   await initAuthState();
+  await loadProfileTitle();
   await loadPins();
   const params = new URLSearchParams(window.location.search);
   const tokenFromLink = params.get('cloneInvite');

@@ -251,6 +251,47 @@ func (h *Handler) GetIPCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"events": events})
 }
 
+func (h *Handler) GetProfile(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	profile, err := h.DB.GetUserProfile(ownerKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"owner_key":     profile.OwnerKey,
+		"display_title": profile.DisplayTitle,
+		"updated_at":    profile.UpdatedAt,
+	})
+}
+
+func (h *Handler) UpdateProfile(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	var payload struct {
+		DisplayTitle string `json:"display_title"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile payload"})
+		return
+	}
+	title := strings.TrimSpace(payload.DisplayTitle)
+	if len(title) > 80 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "display title is too long"})
+		return
+	}
+	if err := h.DB.UpsertUserProfileDisplayTitle(ownerKey, title); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "profile updated", "display_title": title})
+}
+
 func (h *Handler) CreateCloneInvite(c *gin.Context) {
 	ownerKey, ok := h.requireOwnerKey(c)
 	if !ok {

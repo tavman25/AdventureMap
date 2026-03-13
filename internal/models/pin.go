@@ -60,3 +60,10 @@ type CloneInvite struct {
 	Revoked       bool      `json:"revoked"`
 	CreatedAt     time.Time `json:"created_at"`
 }
+
+// UserProfile stores per-owner UI settings.
+type UserProfile struct {
+	OwnerKey    string    `json:"owner_key"`
+	DisplayTitle string   `json:"display_title"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
