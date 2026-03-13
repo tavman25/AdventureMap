@@ -528,7 +528,129 @@ function initSearchInput() {
 }
 
 function updateStats() {
+  updateDistanceStats();
   void updateCountryStatsAsync();
+}
+
+function updateDistanceStats() {
+  const distanceEl = document.getElementById('distanceRange');
+  if (!distanceEl) return;
+
+  const estimates = computeDistanceEstimates(state.pins);
+  const minKm = estimates.minKm;
+  const maxKm = estimates.maxKm;
+  const minMi = kmToMiles(minKm);
+  const maxMi = kmToMiles(maxKm);
+
+  distanceEl.textContent = `${formatDistance(minKm)}-${formatDistance(maxKm)}`;
+  distanceEl.parentElement.title = `Estimated range: ${formatDistance(minKm)}-${formatDistance(maxKm)} km (${formatDistance(minMi)}-${formatDistance(maxMi)} mi)`;
+}
+
+function kmToMiles(km) {
+  return km * 0.621371;
+}
+
+function formatDistance(value) {
+  if (!Number.isFinite(value)) return '0';
+  if (value >= 1000) return Math.round(value).toLocaleString();
+  if (value >= 100) return value.toFixed(1);
+  return value.toFixed(2);
+}
+
+function computeDistanceEstimates(pins) {
+  const points = pins
+    .map((pin) => ({
+      lat: Number(pin.latitude),
+      lng: Number(pin.longitude),
+    }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+
+  if (points.length < 2) {
+    return { minKm: 0, maxKm: 0 };
+  }
+
+  const mstKm = computeMSTDistanceKm(points);
+  const farthestGreedyKm = computeGreedyPathDistanceKm(points, true);
+  const maxKm = Math.max(mstKm, farthestGreedyKm);
+
+  return {
+    minKm: mstKm,
+    maxKm,
+  };
+}
+
+function haversineDistanceKm(a, b) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
+  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return earthRadiusKm * c;
+}
+
+function computeMSTDistanceKm(points) {
+  const n = points.length;
+  const visited = new Array(n).fill(false);
+  const minEdge = new Array(n).fill(Number.POSITIVE_INFINITY);
+  minEdge[0] = 0;
+  let total = 0;
+
+  for (let i = 0; i < n; i += 1) {
+    let next = -1;
+    let best = Number.POSITIVE_INFINITY;
+    for (let j = 0; j < n; j += 1) {
+      if (!visited[j] && minEdge[j] < best) {
+        best = minEdge[j];
+        next = j;
+      }
+    }
+    if (next === -1) break;
+    visited[next] = true;
+    total += best;
+
+    for (let j = 0; j < n; j += 1) {
+      if (visited[j]) continue;
+      const d = haversineDistanceKm(points[next], points[j]);
+      if (d < minEdge[j]) minEdge[j] = d;
+    }
+  }
+
+  return total;
+}
+
+function computeGreedyPathDistanceKm(points, useFarthest) {
+  const n = points.length;
+  const visited = new Array(n).fill(false);
+  let current = 0;
+  let total = 0;
+  visited[current] = true;
+
+  for (let step = 1; step < n; step += 1) {
+    let pick = -1;
+    let pickDistance = useFarthest ? -1 : Number.POSITIVE_INFINITY;
+
+    for (let i = 0; i < n; i += 1) {
+      if (visited[i]) continue;
+      const d = haversineDistanceKm(points[current], points[i]);
+      if ((useFarthest && d > pickDistance) || (!useFarthest && d < pickDistance)) {
+        pick = i;
+        pickDistance = d;
+      }
+    }
+
+    if (pick === -1 || !Number.isFinite(pickDistance)) break;
+    visited[pick] = true;
+    total += pickDistance;
+    current = pick;
+  }
+
+  return total;
 }
 
 async function updateCountryStatsAsync() {
