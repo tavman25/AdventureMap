@@ -267,7 +267,7 @@ func (h *Handler) verifyGoogleCredential(ctx context.Context, credential string)
 
 func (h *Handler) isAllowedEmail(email string) bool {
 	if len(h.AllowedEmails) == 0 {
-		return false
+		return true
 	}
 	_, ok := h.AllowedEmails[strings.ToLower(strings.TrimSpace(email))]
 	return ok
