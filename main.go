@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"travel-map/internal/database"
 	"travel-map/internal/handlers"
@@ -21,15 +22,17 @@ func main() {
 	// Configuration from environment variables
 	port := getEnv("PORT", "8080")
 	dbPath := getEnv("DB_PATH", "./data/travel.db")
+	uploadDir := getEnv("UPLOAD_DIR", filepath.Join(filepath.Dir(dbPath), "uploads"))
 	ginMode := getEnv("GIN_MODE", "release")
 
 	gin.SetMode(ginMode)
 
-	// Ensure data directory exists
-	if err := os.MkdirAll("./data", 0755); err != nil {
+	// Ensure writable data directories exist.
+	dataDir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("failed to create data directory: %v", err)
 	}
-	if err := os.MkdirAll("./data/uploads", 0755); err != nil {
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
 		log.Fatalf("failed to create uploads directory: %v", err)
 	}
 
@@ -47,7 +50,7 @@ func main() {
 	}
 
 	// Initialize handlers
-	h := handlers.New(db)
+	h := handlers.New(db, uploadDir)
 
 	// Set up router
 	r := gin.New()
@@ -75,7 +78,7 @@ func main() {
 	}
 
 	// Serve uploaded images from disk.
-	r.Static("/uploads", "./data/uploads")
+	r.Static("/uploads", uploadDir)
 
 	// Serve embedded static files (HTML, CSS, JS)
 	stripped, err := fs.Sub(staticFiles, "static")

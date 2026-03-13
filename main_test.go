@@ -17,13 +17,14 @@ func setupTestRouter(t *testing.T) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 
 	tmpDB := t.TempDir() + "/test.db"
+	uploadDir := t.TempDir() + "/uploads"
 	db, err := database.New(tmpDB)
 	if err != nil {
 		t.Fatalf("failed to create test db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
 
-	h := handlers.New(db)
+	h := handlers.New(db, uploadDir)
 	r := gin.New()
 	api := r.Group("/api")
 	api.GET("/pins", h.GetPins)

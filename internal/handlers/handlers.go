@@ -20,12 +20,13 @@ import (
 
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
-	DB *database.DB
+	DB        *database.DB
+	UploadDir string
 }
 
 // New creates a new Handler.
-func New(db *database.DB) *Handler {
-	return &Handler{DB: db}
+func New(db *database.DB, uploadDir string) *Handler {
+	return &Handler{DB: db, UploadDir: uploadDir}
 }
 
 // GetPins returns all pins as JSON.
@@ -299,7 +300,7 @@ func (h *Handler) UploadImage(c *gin.Context) {
 		return
 	}
 
-	if err := os.MkdirAll("./data/uploads", 0755); err != nil {
+	if err := os.MkdirAll(h.UploadDir, 0755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prepare upload directory"})
 		return
 	}
@@ -310,7 +311,7 @@ func (h *Handler) UploadImage(c *gin.Context) {
 		return
 	}
 	fileName := fmt.Sprintf("%d-%x%s", time.Now().Unix(), randPart, ext)
-	savePath := filepath.Join("./data/uploads", fileName)
+	savePath := filepath.Join(h.UploadDir, fileName)
 
 	if err := c.SaveUploadedFile(file, savePath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image"})
