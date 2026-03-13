@@ -37,11 +37,11 @@
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         Slideshow
       </button>
-      <button class="btn btn-ghost" onclick="showImportModal()" title="Import Google Maps JSON">
+      <button class="btn btn-ghost admin-only-action" id="importBtn" onclick="showImportModal()" title="Import Google Maps JSON">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
         Import
       </button>
-      <button class="btn btn-primary" onclick="showAddModal()">
+      <button class="btn btn-primary admin-only-action" id="addPinBtn" onclick="showAddModal()">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
         Add Pin
       </button>
@@ -201,12 +201,16 @@
 <div class="modal-overlay" id="authModal">
   <div class="modal glass auth-modal">
     <div class="modal-header">
-      <h3>🔐 Admin Login</h3>
+      <h3 id="authModalTitle">🔐 Sign In</h3>
       <button class="modal-close" onclick="closeAuthModal()">✕</button>
+    </div>
+    <div id="googleLoginWrap" class="google-login-wrap" style="display:none">
+      <div id="googleLoginButton" class="google-login-button"></div>
+      <div class="auth-divider"><span>or use password</span></div>
     </div>
     <form id="authForm" onsubmit="submitAdminLogin(event)">
       <div class="form-group">
-        <label>Password</label>
+        <label id="authPasswordLabel">Password</label>
         <input type="password" id="adminPassword" autocomplete="current-password" placeholder="Enter admin password" required />
       </div>
       <div class="modal-actions">

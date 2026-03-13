@@ -5,6 +5,7 @@ import "time"
 // Pin represents a location pinned on the travel map.
 type Pin struct {
 	ID          int64     `json:"id"`
+	OwnerKey    string    `json:"-"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	ImageURL    string    `json:"image_url"`

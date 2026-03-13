@@ -24,7 +24,7 @@ func setupTestRouter(t *testing.T) *gin.Engine {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	h := handlers.New(db, uploadDir, "", "test-secret")
+	h := handlers.New(db, uploadDir, "", "test-secret", "", "")
 	r := gin.New()
 	api := r.Group("/api")
 	api.GET("/pins", h.GetPins)

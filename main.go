@@ -25,6 +25,8 @@ func main() {
 	uploadDir := getEnv("UPLOAD_DIR", filepath.Join(filepath.Dir(dbPath), "uploads"))
 	adminPassword := getEnv("ADMIN_PASSWORD", "")
 	authSecret := getEnv("AUTH_SECRET", "travel-map-auth-secret")
+	googleClientID := getEnv("GOOGLE_CLIENT_ID", "")
+	allowedEmails := getEnv("ALLOWED_EMAILS", "")
 	ginMode := getEnv("GIN_MODE", "release")
 
 	gin.SetMode(ginMode)
@@ -52,7 +54,7 @@ func main() {
 	}
 
 	// Initialize handlers
-	h := handlers.New(db, uploadDir, adminPassword, authSecret)
+	h := handlers.New(db, uploadDir, adminPassword, authSecret, googleClientID, allowedEmails)
 
 	// Set up router
 	r := gin.New()
@@ -71,6 +73,7 @@ func main() {
 	{
 		api.GET("/auth/status", h.GetAuthStatus)
 		api.POST("/auth/login", h.Login)
+		api.POST("/auth/google", h.GoogleLogin)
 		api.POST("/auth/logout", h.Logout)
 
 		api.GET("/pins", h.GetPins)

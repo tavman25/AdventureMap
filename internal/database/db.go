@@ -33,6 +33,7 @@ func (db *DB) migrate() error {
 	_, err := db.conn.Exec(`
 		CREATE TABLE IF NOT EXISTS pins (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner_key   TEXT    NOT NULL DEFAULT 'password-admin',
 			title       TEXT    NOT NULL,
 			description TEXT    NOT NULL DEFAULT '',
 			image_url   TEXT    NOT NULL DEFAULT '',
@@ -56,15 +57,34 @@ func (db *DB) migrate() error {
 		log.Printf("migration alter error: %v", err)
 		return err
 	}
+
+	_, err = db.conn.Exec(`ALTER TABLE pins ADD COLUMN owner_key TEXT NOT NULL DEFAULT 'password-admin'`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		log.Printf("migration alter owner_key error: %v", err)
+		return err
+	}
+
+	_, err = db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_pins_owner_key_created_at ON pins(owner_key, created_at DESC)`)
+	if err != nil {
+		log.Printf("migration create index error: %v", err)
+		return err
+	}
 	return nil
 }
 
 // GetAllPins returns all pins ordered by creation time descending.
-func (db *DB) GetAllPins() ([]models.Pin, error) {
-	rows, err := db.conn.Query(`
-		SELECT id, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at
-		FROM pins ORDER BY created_at DESC
-	`)
+func (db *DB) GetAllPins(ownerKey string) ([]models.Pin, error) {
+	query := `
+		SELECT id, owner_key, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at
+		FROM pins`
+	args := []interface{}{}
+	if ownerKey != "" {
+		query += ` WHERE owner_key = ?`
+		args = append(args, ownerKey)
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -72,15 +92,11 @@ func (db *DB) GetAllPins() ([]models.Pin, error) {
 
 	var pins []models.Pin
 	for rows.Next() {
-		var p models.Pin
-		var ca, ua string
-		if err := rows.Scan(&p.ID, &p.Title, &p.Description, &p.ImageURL, &p.Latitude, &p.Longitude,
-			&p.Color, &p.Icon, &p.VisitedAt, &ca, &ua); err != nil {
+		p, err := scanPin(rows)
+		if err != nil {
 			return nil, err
 		}
-		p.CreatedAt, _ = time.Parse(time.RFC3339, ca)
-		p.UpdatedAt, _ = time.Parse(time.RFC3339, ua)
-		pins = append(pins, p)
+		pins = append(pins, *p)
 	}
 	if pins == nil {
 		pins = []models.Pin{}
@@ -89,14 +105,20 @@ func (db *DB) GetAllPins() ([]models.Pin, error) {
 }
 
 // GetPin returns a single pin by ID.
-func (db *DB) GetPin(id int64) (*models.Pin, error) {
-	row := db.conn.QueryRow(`
-		SELECT id, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at
-		FROM pins WHERE id = ?
-	`, id)
+func (db *DB) GetPin(id int64, ownerKey string) (*models.Pin, error) {
+	query := `
+		SELECT id, owner_key, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at
+		FROM pins WHERE id = ?`
+	args := []interface{}{id}
+	if ownerKey != "" {
+		query += ` AND owner_key = ?`
+		args = append(args, ownerKey)
+	}
+
+	row := db.conn.QueryRow(query, args...)
 	var p models.Pin
 	var ca, ua string
-	if err := row.Scan(&p.ID, &p.Title, &p.Description, &p.ImageURL, &p.Latitude, &p.Longitude,
+	if err := row.Scan(&p.ID, &p.OwnerKey, &p.Title, &p.Description, &p.ImageURL, &p.Latitude, &p.Longitude,
 		&p.Color, &p.Icon, &p.VisitedAt, &ca, &ua); err != nil {
 		return nil, err
 	}
@@ -106,14 +128,15 @@ func (db *DB) GetPin(id int64) (*models.Pin, error) {
 }
 
 // CreatePin inserts a new pin and returns its assigned ID.
-func (db *DB) CreatePin(p *models.Pin) error {
+func (db *DB) CreatePin(ownerKey string, p *models.Pin) error {
 	now := time.Now().UTC()
 	p.CreatedAt = now
 	p.UpdatedAt = now
+	p.OwnerKey = ownerKey
 	result, err := db.conn.Exec(`
-		INSERT INTO pins (title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, p.Title, p.Description, p.ImageURL, p.Latitude, p.Longitude, p.Color, p.Icon, p.VisitedAt,
+		INSERT INTO pins (owner_key, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, ownerKey, p.Title, p.Description, p.ImageURL, p.Latitude, p.Longitude, p.Color, p.Icon, p.VisitedAt,
 		now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		return err
@@ -123,31 +146,62 @@ func (db *DB) CreatePin(p *models.Pin) error {
 }
 
 // UpdatePin modifies an existing pin.
-func (db *DB) UpdatePin(p *models.Pin) error {
+func (db *DB) UpdatePin(ownerKey string, p *models.Pin) error {
 	p.UpdatedAt = time.Now().UTC()
-	_, err := db.conn.Exec(`
+	query := `
 		UPDATE pins SET title=?, description=?, image_url=?, latitude=?, longitude=?, color=?, icon=?, visited_at=?, updated_at=?
-		WHERE id=?
-	`, p.Title, p.Description, p.ImageURL, p.Latitude, p.Longitude, p.Color, p.Icon, p.VisitedAt,
-		p.UpdatedAt.Format(time.RFC3339), p.ID)
-	return err
+		WHERE id=?`
+	args := []interface{}{p.Title, p.Description, p.ImageURL, p.Latitude, p.Longitude, p.Color, p.Icon, p.VisitedAt,
+		p.UpdatedAt.Format(time.RFC3339), p.ID}
+	if ownerKey != "" {
+		query += ` AND owner_key=?`
+		args = append(args, ownerKey)
+	}
+	result, err := db.conn.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // DeletePin removes a pin by ID.
-func (db *DB) DeletePin(id int64) error {
-	_, err := db.conn.Exec(`DELETE FROM pins WHERE id = ?`, id)
-	return err
+func (db *DB) DeletePin(id int64, ownerKey string) error {
+	query := `DELETE FROM pins WHERE id = ?`
+	args := []interface{}{id}
+	if ownerKey != "" {
+		query += ` AND owner_key = ?`
+		args = append(args, ownerKey)
+	}
+	result, err := db.conn.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // BulkCreatePins inserts multiple pins efficiently using a transaction.
-func (db *DB) BulkCreatePins(pins []models.Pin) (int, error) {
+func (db *DB) BulkCreatePins(ownerKey string, pins []models.Pin) (int, error) {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return 0, err
 	}
 	stmt, err := tx.Prepare(`
-		INSERT INTO pins (title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO pins (owner_key, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		tx.Rollback()
@@ -158,7 +212,7 @@ func (db *DB) BulkCreatePins(pins []models.Pin) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	count := 0
 	for _, p := range pins {
-		_, err := stmt.Exec(p.Title, p.Description, p.ImageURL, p.Latitude, p.Longitude,
+		_, err := stmt.Exec(ownerKey, p.Title, p.Description, p.ImageURL, p.Latitude, p.Longitude,
 			p.Color, p.Icon, p.VisitedAt, now, now)
 		if err != nil {
 			tx.Rollback()
@@ -170,8 +224,14 @@ func (db *DB) BulkCreatePins(pins []models.Pin) (int, error) {
 }
 
 // UpdatePinImageByID sets a pin image URL by ID.
-func (db *DB) UpdatePinImageByID(id int64, imageURL string) (bool, error) {
-	result, err := db.conn.Exec(`UPDATE pins SET image_url=?, updated_at=? WHERE id=?`, imageURL, time.Now().UTC().Format(time.RFC3339), id)
+func (db *DB) UpdatePinImageByID(ownerKey string, id int64, imageURL string) (bool, error) {
+	query := `UPDATE pins SET image_url=?, updated_at=? WHERE id=?`
+	args := []interface{}{imageURL, time.Now().UTC().Format(time.RFC3339), id}
+	if ownerKey != "" {
+		query += ` AND owner_key=?`
+		args = append(args, ownerKey)
+	}
+	result, err := db.conn.Exec(query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -183,13 +243,14 @@ func (db *DB) UpdatePinImageByID(id int64, imageURL string) (bool, error) {
 }
 
 // UpdatePinImageByTitle sets pin image URL for case-insensitive exact title matches.
-func (db *DB) UpdatePinImageByTitle(title, imageURL string) (int64, error) {
-	result, err := db.conn.Exec(
-		`UPDATE pins SET image_url=?, updated_at=? WHERE lower(title)=lower(?)`,
-		imageURL,
-		time.Now().UTC().Format(time.RFC3339),
-		title,
-	)
+func (db *DB) UpdatePinImageByTitle(ownerKey, title, imageURL string) (int64, error) {
+	query := `UPDATE pins SET image_url=?, updated_at=? WHERE lower(title)=lower(?)`
+	args := []interface{}{imageURL, time.Now().UTC().Format(time.RFC3339), title}
+	if ownerKey != "" {
+		query += ` AND owner_key=?`
+		args = append(args, ownerKey)
+	}
+	result, err := db.conn.Exec(query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -226,6 +287,18 @@ func (db *DB) NormalizePinImageURLs() (int64, error) {
 		updated++
 	}
 	return updated, rows.Err()
+}
+
+func scanPin(scanner interface{ Scan(dest ...interface{}) error }) (*models.Pin, error) {
+	var p models.Pin
+	var ca, ua string
+	if err := scanner.Scan(&p.ID, &p.OwnerKey, &p.Title, &p.Description, &p.ImageURL, &p.Latitude, &p.Longitude,
+		&p.Color, &p.Icon, &p.VisitedAt, &ca, &ua); err != nil {
+		return nil, err
+	}
+	p.CreatedAt, _ = time.Parse(time.RFC3339, ca)
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, ua)
+	return &p, nil
 }
 
 func normalizeStoredImageURLs(raw string) string {

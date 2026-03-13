@@ -25,6 +25,10 @@ const state = {
   slideshowDelayMs: 5000,
   authEnabled: false,
   isAdmin: false,
+  passwordLoginEnabled: false,
+  googleLoginEnabled: false,
+  googleClientId: '',
+  googleScriptLoaded: false,
 };
 
 const COUNTRY_CACHE_KEY = 'travel-map-country-cache-v1';
@@ -313,6 +317,14 @@ async function loadPins() {
     state.pins.forEach(addMarkerToMap);
     updateStats();
   } catch (err) {
+    clusterGroup.clearLayers();
+    state.markers = {};
+    state.pins = [];
+    renderSidebarPinList(state.pins);
+    updateStats();
+    if (state.authEnabled && /401|Failed to load pins/i.test(err.message)) {
+      return;
+    }
     showToast('Could not load pins: ' + err.message, 'error');
   }
 }
@@ -320,9 +332,12 @@ async function loadPins() {
 function renderSidebarPinList(pins) {
   const list = document.getElementById('pinList');
   if (!pins.length) {
+    const message = state.authEnabled && !state.isAdmin
+      ? 'Sign in to view your personal travel map and photos.'
+      : 'No places yet!<br>Click <strong>Add Pin</strong> or click anywhere on the map to start your travel story.';
     list.innerHTML = `<div class="empty-state">
       <span class="empty-icon">🌍</span>
-      <p>No places yet!<br>Click <strong>Add Pin</strong> or click anywhere on the map to start your travel story.</p>
+      <p>${message}</p>
     </div>`;
     return;
   }
@@ -884,6 +899,17 @@ async function loginAdmin(password) {
   return data;
 }
 
+async function loginWithGoogle(credential) {
+  const res = await fetch('/api/auth/google', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ credential }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Google login failed');
+  return data;
+}
+
 async function logoutAdmin() {
   await fetch('/api/auth/logout', { method: 'POST' });
 }
@@ -897,10 +923,34 @@ function updateAuthUI() {
       authBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1a5 5 0 00-5 5v3H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 8V6a3 3 0 016 0v3H9z"/></svg> Logout';
       authBtn.title = 'Logout admin';
     } else {
-      authBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1a5 5 0 00-5 5v3H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 8V6a3 3 0 016 0v3H9z"/></svg> Admin Login';
-      authBtn.title = 'Admin login';
+      authBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1a5 5 0 00-5 5v3H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 8V6a3 3 0 016 0v3H9z"/></svg> Sign In';
+      authBtn.title = 'Sign in';
     }
   }
+
+  const modalTitle = document.getElementById('authModalTitle');
+  if (modalTitle) {
+    modalTitle.textContent = state.googleLoginEnabled ? '🔐 Sign In to Your Map' : '🔐 Admin Login';
+  }
+  const passwordLabel = document.getElementById('authPasswordLabel');
+  if (passwordLabel) {
+    passwordLabel.textContent = state.passwordLoginEnabled ? 'Password' : 'Password login disabled';
+  }
+  const passwordInput = document.getElementById('adminPassword');
+  if (passwordInput) {
+    passwordInput.disabled = !state.passwordLoginEnabled;
+  }
+  const authForm = document.getElementById('authForm');
+  if (authForm) {
+    authForm.style.display = state.passwordLoginEnabled ? 'block' : 'none';
+  }
+  const googleWrap = document.getElementById('googleLoginWrap');
+  if (googleWrap) {
+    googleWrap.style.display = state.googleLoginEnabled ? 'block' : 'none';
+  }
+  document.querySelectorAll('.admin-only-action').forEach((el) => {
+    el.style.display = (!state.authEnabled || state.isAdmin) ? '' : 'none';
+  });
 
   renderSidebarPinList(state.pins);
   refreshMarkerPopups();
@@ -911,11 +961,20 @@ async function initAuthState() {
     const status = await fetchAuthStatus();
     state.authEnabled = !!status.auth_enabled;
     state.isAdmin = !!status.is_admin;
+    state.passwordLoginEnabled = !!status.password_login_enabled;
+    state.googleLoginEnabled = !!status.google_login_enabled;
+    state.googleClientId = status.google_client_id || '';
   } catch {
     state.authEnabled = false;
     state.isAdmin = false;
+    state.passwordLoginEnabled = false;
+    state.googleLoginEnabled = false;
+    state.googleClientId = '';
   }
   updateAuthUI();
+  if (state.googleLoginEnabled && state.googleClientId) {
+    void ensureGoogleAuthReady();
+  }
 }
 
 function handleAuthButtonClick() {
@@ -924,7 +983,11 @@ function handleAuthButtonClick() {
     void (async () => {
       await logoutAdmin();
       state.isAdmin = false;
+      state.pins = [];
+      clusterGroup.clearLayers();
+      state.markers = {};
       updateAuthUI();
+      renderSidebarPinList(state.pins);
       showToast('Logged out', 'success');
     })();
     return;
@@ -940,15 +1003,79 @@ function closeAuthModal() {
 
 async function submitAdminLogin(event) {
   event.preventDefault();
+  if (!state.passwordLoginEnabled) return;
   const password = document.getElementById('adminPassword').value;
   try {
     await loginAdmin(password);
     state.isAdmin = true;
     updateAuthUI();
     closeAuthModal();
+    await loadPins();
     showToast('Admin access enabled', 'success');
   } catch (err) {
     showToast(err.message, 'error');
+  }
+}
+
+function loadGoogleIdentityScript() {
+  if (state.googleScriptLoaded) return Promise.resolve();
+  if (window.google?.accounts?.id) {
+    state.googleScriptLoaded = true;
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-google-identity="true"]');
+    if (existing) {
+      existing.addEventListener('load', () => {
+        state.googleScriptLoaded = true;
+        resolve();
+      }, { once: true });
+      existing.addEventListener('error', reject, { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleIdentity = 'true';
+    script.addEventListener('load', () => {
+      state.googleScriptLoaded = true;
+      resolve();
+    }, { once: true });
+    script.addEventListener('error', () => reject(new Error('Failed to load Google sign-in script')), { once: true });
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureGoogleAuthReady() {
+  await loadGoogleIdentityScript();
+  if (!window.google?.accounts?.id) return;
+  window.google.accounts.id.initialize({
+    client_id: state.googleClientId,
+    callback: async (response) => {
+      try {
+        await loginWithGoogle(response.credential);
+        state.isAdmin = true;
+        updateAuthUI();
+        closeAuthModal();
+        await loadPins();
+        showToast('Signed in with Google', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    },
+    auto_select: false,
+  });
+  const target = document.getElementById('googleLoginButton');
+  if (target) {
+    target.innerHTML = '';
+    window.google.accounts.id.renderButton(target, {
+      theme: 'outline',
+      size: 'large',
+      shape: 'pill',
+      text: 'continue_with',
+      width: 280,
+    });
   }
 }
 
@@ -1216,7 +1343,11 @@ function getPinImages(pin) {
 }
 
 // ─── Kick-off ─────────────────────────────────────────────────
-initSearchInput();
-updateSlideshowControls();
-void initAuthState();
-loadPins();
+async function bootstrapApp() {
+  initSearchInput();
+  updateSlideshowControls();
+  await initAuthState();
+  await loadPins();
+}
+
+void bootstrapApp();
