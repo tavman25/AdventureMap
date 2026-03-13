@@ -581,6 +581,13 @@ function updateRouteModeUI() {
   if (clearRouteBtn) {
     clearRouteBtn.style.display = state.routeConnectMode ? '' : 'none';
   }
+
+  // Route drawing uses pointer drag between pins; disable map pan to avoid fighting the gesture.
+  if (state.routeConnectMode) {
+    map.dragging.disable();
+  } else {
+    map.dragging.enable();
+  }
 }
 
 function toggleRouteConnectMode() {
@@ -592,7 +599,7 @@ function toggleRouteConnectMode() {
   renderRouteConnections();
 
   if (state.routeConnectMode) {
-    showToast('Route mode ON: drag from one pin to another to create a travel leg.', 'success');
+    showToast('Route mode ON: map panning is locked. Drag pin-to-pin to create a travel leg.', 'success');
   } else {
     showToast('Route mode OFF', 'success');
   }
