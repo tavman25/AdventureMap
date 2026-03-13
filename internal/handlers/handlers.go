@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -131,6 +132,18 @@ func (h *Handler) RequireAdmin() gin.HandlerFunc {
 	}
 }
 
+func (h *Handler) RequireSuperAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		identity, ok := h.currentIdentity(c)
+		if !ok || identity != "password-admin" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "super-admin login required"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 func (h *Handler) resolveOwnerKey(c *gin.Context) (string, bool) {
 	identity, ok := h.currentIdentity(c)
 	if !ok {
@@ -174,20 +187,24 @@ func (h *Handler) Login(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.logAuthAttempt(c, models.AuthEvent{Provider: "password", Success: false, FailureReason: "invalid payload"})
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid login payload"})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(payload.Password), []byte(h.AdminPassword)) != 1 {
+		h.logAuthAttempt(c, models.AuthEvent{Provider: "password", Success: false, FailureReason: "invalid password"})
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid password"})
 		return
 	}
 
 	h.setSessionCookie(c, "password-admin")
+	h.logAuthAttempt(c, models.AuthEvent{Provider: "password", Identity: "password-admin", Success: true})
 	c.JSON(http.StatusOK, gin.H{"message": "logged in", "is_admin": true})
 }
 
 func (h *Handler) GoogleLogin(c *gin.Context) {
 	if !h.googleAuthEnabled() {
+		h.logAuthAttempt(c, models.AuthEvent{Provider: "google", Success: false, FailureReason: "google login disabled"})
 		c.JSON(http.StatusBadRequest, gin.H{"error": "google login is not configured"})
 		return
 	}
@@ -196,27 +213,41 @@ func (h *Handler) GoogleLogin(c *gin.Context) {
 		Credential string `json:"credential"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil || strings.TrimSpace(payload.Credential) == "" {
+		h.logAuthAttempt(c, models.AuthEvent{Provider: "google", Success: false, FailureReason: "invalid google payload"})
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid google login payload"})
 		return
 	}
 
 	email, err := h.verifyGoogleCredential(c.Request.Context(), payload.Credential)
 	if err != nil {
+		h.logAuthAttempt(c, models.AuthEvent{Provider: "google", Success: false, FailureReason: err.Error()})
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
 	if !h.isAllowedEmail(email) {
+		h.logAuthAttempt(c, models.AuthEvent{Provider: "google", Email: email, Identity: email, Success: false, FailureReason: "email not allowed"})
 		c.JSON(http.StatusForbidden, gin.H{"error": "this Google account is not allowed to edit"})
 		return
 	}
 
 	h.setSessionCookie(c, email)
+	h.logAuthAttempt(c, models.AuthEvent{Provider: "google", Email: email, Identity: email, Success: true})
 	c.JSON(http.StatusOK, gin.H{"message": "logged in", "is_admin": true, "email": email})
 }
 
 func (h *Handler) Logout(c *gin.Context) {
 	c.SetCookie(h.adminCookieName(), "", -1, "/", "", h.isSecureRequest(c), true)
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
+}
+
+func (h *Handler) GetIPCheck(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	events, err := h.DB.ListAuthEvents(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events})
 }
 
 func (h *Handler) verifyGoogleCredential(ctx context.Context, credential string) (string, error) {
@@ -681,4 +712,27 @@ func sanitizePathSegment(value string) string {
 	}
 	replacer := strings.NewReplacer("@", "_at_", ".", "_", "/", "_", "\\", "_", ":", "_", " ", "_")
 	return replacer.Replace(value)
+}
+
+func (h *Handler) logAuthAttempt(c *gin.Context, event models.AuthEvent) {
+	event.IP = c.ClientIP()
+	event.ForwardedFor = strings.TrimSpace(c.GetHeader("X-Forwarded-For"))
+	event.UserAgent = c.Request.UserAgent()
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	event.HostName = lookupHostName(event.IP)
+	_ = h.DB.LogAuthEvent(event)
+}
+
+func lookupHostName(ip string) string {
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return ""
+	}
+	names, err := net.LookupAddr(parsed.String())
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(names[0], ".")
 }

@@ -33,3 +33,18 @@ type GoogleMapsGeometry struct {
 	Type        string    `json:"type"`
 	Coordinates []float64 `json:"coordinates"` // [lng, lat] in GeoJSON
 }
+
+// AuthEvent represents a recorded authentication attempt.
+type AuthEvent struct {
+	ID            int64     `json:"id"`
+	Provider      string    `json:"provider"`
+	Email         string    `json:"email"`
+	Identity      string    `json:"identity"`
+	IP            string    `json:"ip"`
+	ForwardedFor  string    `json:"forwarded_for"`
+	HostName      string    `json:"host_name"`
+	UserAgent     string    `json:"user_agent"`
+	Success       bool      `json:"success"`
+	FailureReason string    `json:"failure_reason"`
+	CreatedAt     time.Time `json:"created_at"`
+}

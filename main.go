@@ -79,6 +79,13 @@ func main() {
 		api.GET("/pins", h.GetPins)
 		api.GET("/pins/:id", h.GetPin)
 
+		superAdmin := api.Group("")
+		superAdmin.Use(h.RequireSuperAdmin())
+		{
+			superAdmin.GET("/IPCheck", h.GetIPCheck)
+			superAdmin.GET("/auth/events", h.GetIPCheck)
+		}
+
 		admin := api.Group("")
 		admin.Use(h.RequireAdmin())
 		{

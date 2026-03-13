@@ -69,6 +69,32 @@ func (db *DB) migrate() error {
 		log.Printf("migration create index error: %v", err)
 		return err
 	}
+
+	_, err = db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS auth_events (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider       TEXT    NOT NULL,
+			email          TEXT    NOT NULL DEFAULT '',
+			identity       TEXT    NOT NULL DEFAULT '',
+			ip             TEXT    NOT NULL DEFAULT '',
+			forwarded_for  TEXT    NOT NULL DEFAULT '',
+			host_name      TEXT    NOT NULL DEFAULT '',
+			user_agent     TEXT    NOT NULL DEFAULT '',
+			success        INTEGER NOT NULL DEFAULT 0,
+			failure_reason TEXT    NOT NULL DEFAULT '',
+			created_at     DATETIME NOT NULL
+		);
+	`)
+	if err != nil {
+		log.Printf("migration auth_events error: %v", err)
+		return err
+	}
+
+	_, err = db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_auth_events_created_at ON auth_events(created_at DESC)`)
+	if err != nil {
+		log.Printf("migration auth_events index error: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -299,6 +325,57 @@ func scanPin(scanner interface{ Scan(dest ...interface{}) error }) (*models.Pin,
 	p.CreatedAt, _ = time.Parse(time.RFC3339, ca)
 	p.UpdatedAt, _ = time.Parse(time.RFC3339, ua)
 	return &p, nil
+}
+
+// LogAuthEvent stores an authentication attempt for audit purposes.
+func (db *DB) LogAuthEvent(event models.AuthEvent) error {
+	createdAt := event.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err := db.conn.Exec(`
+		INSERT INTO auth_events (provider, email, identity, ip, forwarded_for, host_name, user_agent, success, failure_reason, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, event.Provider, event.Email, event.Identity, event.IP, event.ForwardedFor, event.HostName, event.UserAgent, boolToInt(event.Success), event.FailureReason, createdAt.Format(time.RFC3339))
+	return err
+}
+
+// ListAuthEvents returns recent authentication attempts ordered newest first.
+func (db *DB) ListAuthEvents(limit int) ([]models.AuthEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.conn.Query(`
+		SELECT id, provider, email, identity, ip, forwarded_for, host_name, user_agent, success, failure_reason, created_at
+		FROM auth_events
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []models.AuthEvent{}
+	for rows.Next() {
+		var event models.AuthEvent
+		var successInt int
+		var createdAt string
+		if err := rows.Scan(&event.ID, &event.Provider, &event.Email, &event.Identity, &event.IP, &event.ForwardedFor, &event.HostName, &event.UserAgent, &successInt, &event.FailureReason, &createdAt); err != nil {
+			return nil, err
+		}
+		event.Success = successInt == 1
+		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func normalizeStoredImageURLs(raw string) string {
