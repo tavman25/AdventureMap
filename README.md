@@ -1,4 +1,4 @@
-# Travel Map 🌍
+# AdventureMap 🌍
 
 A beautiful, self-hosted travel map built with **Go + Leaflet.js**. Pin every place you've visited on a stunning dark-theme interactive world map.
 
