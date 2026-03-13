@@ -153,6 +153,27 @@ func (db *DB) migrate() error {
 		log.Printf("migration user_profiles error: %v", err)
 		return err
 	}
+
+	_, err = db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS route_connections (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner_key    TEXT    NOT NULL,
+			from_pin_id  INTEGER NOT NULL,
+			to_pin_id    INTEGER NOT NULL,
+			created_at   DATETIME NOT NULL,
+			UNIQUE(owner_key, from_pin_id, to_pin_id)
+		);
+	`)
+	if err != nil {
+		log.Printf("migration route_connections error: %v", err)
+		return err
+	}
+
+	_, err = db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_route_connections_owner_created ON route_connections(owner_key, created_at ASC)`)
+	if err != nil {
+		log.Printf("migration route_connections index error: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -257,6 +278,16 @@ func (db *DB) UpdatePin(ownerKey string, p *models.Pin) error {
 
 // DeletePin removes a pin by ID.
 func (db *DB) DeletePin(id int64, ownerKey string) error {
+	cleanupQuery := `DELETE FROM route_connections WHERE (from_pin_id = ? OR to_pin_id = ?)`
+	cleanupArgs := []interface{}{id, id}
+	if ownerKey != "" {
+		cleanupQuery += ` AND owner_key = ?`
+		cleanupArgs = append(cleanupArgs, ownerKey)
+	}
+	if _, err := db.conn.Exec(cleanupQuery, cleanupArgs...); err != nil {
+		return err
+	}
+
 	query := `DELETE FROM pins WHERE id = ?`
 	args := []interface{}{id}
 	if ownerKey != "" {
@@ -275,6 +306,112 @@ func (db *DB) DeletePin(id int64, ownerKey string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// ListRouteConnections returns all route segments in creation order for an owner.
+func (db *DB) ListRouteConnections(ownerKey string) ([]models.RouteConnection, error) {
+	query := `
+		SELECT id, owner_key, from_pin_id, to_pin_id, created_at
+		FROM route_connections`
+	args := []interface{}{}
+	if ownerKey != "" {
+		query += ` WHERE owner_key = ?`
+		args = append(args, ownerKey)
+	}
+	query += ` ORDER BY created_at ASC, id ASC`
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	routes := []models.RouteConnection{}
+	for rows.Next() {
+		var route models.RouteConnection
+		var createdAt string
+		if err := rows.Scan(&route.ID, &route.OwnerKey, &route.FromPinID, &route.ToPinID, &createdAt); err != nil {
+			return nil, err
+		}
+		route.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		routes = append(routes, route)
+	}
+	return routes, rows.Err()
+}
+
+func (db *DB) pinBelongsToOwner(pinID int64, ownerKey string) (bool, error) {
+	row := db.conn.QueryRow(`SELECT COUNT(1) FROM pins WHERE id = ? AND owner_key = ?`, pinID, ownerKey)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// CreateRouteConnection creates a directed route segment for an owner.
+func (db *DB) CreateRouteConnection(ownerKey string, fromPinID, toPinID int64) (*models.RouteConnection, error) {
+	fromOwned, err := db.pinBelongsToOwner(fromPinID, ownerKey)
+	if err != nil {
+		return nil, err
+	}
+	toOwned, err := db.pinBelongsToOwner(toPinID, ownerKey)
+	if err != nil {
+		return nil, err
+	}
+	if !fromOwned || !toOwned {
+		return nil, sql.ErrNoRows
+	}
+
+	now := time.Now().UTC()
+	result, err := db.conn.Exec(`
+		INSERT OR IGNORE INTO route_connections (owner_key, from_pin_id, to_pin_id, created_at)
+		VALUES (?, ?, ?, ?)
+	`, ownerKey, fromPinID, toPinID, now.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	if id == 0 {
+		row := db.conn.QueryRow(`
+			SELECT id, created_at
+			FROM route_connections
+			WHERE owner_key = ? AND from_pin_id = ? AND to_pin_id = ?
+		`, ownerKey, fromPinID, toPinID)
+		var createdAt string
+		if err := row.Scan(&id, &createdAt); err != nil {
+			return nil, err
+		}
+		parsedCreatedAt, _ := time.Parse(time.RFC3339, createdAt)
+		return &models.RouteConnection{ID: id, OwnerKey: ownerKey, FromPinID: fromPinID, ToPinID: toPinID, CreatedAt: parsedCreatedAt}, nil
+	}
+
+	return &models.RouteConnection{ID: id, OwnerKey: ownerKey, FromPinID: fromPinID, ToPinID: toPinID, CreatedAt: now}, nil
+}
+
+// DeleteRouteConnection removes one route segment for an owner.
+func (db *DB) DeleteRouteConnection(ownerKey string, id int64) error {
+	result, err := db.conn.Exec(`DELETE FROM route_connections WHERE id = ? AND owner_key = ?`, id, ownerKey)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// ClearRouteConnections removes all route segments for an owner.
+func (db *DB) ClearRouteConnections(ownerKey string) error {
+	_, err := db.conn.Exec(`DELETE FROM route_connections WHERE owner_key = ?`, ownerKey)
+	return err
 }
 
 // BulkCreatePins inserts multiple pins efficiently using a transaction.
@@ -565,21 +702,23 @@ func (db *DB) ConsumeCloneInvite(id int64) error {
 
 // ClonePinsToOwner copies all pins from one owner to another.
 func (db *DB) ClonePinsToOwner(sourceOwnerKey, targetOwnerKey string, includePhotos bool) (int, error) {
-	rows, err := db.conn.Query(`
-		SELECT title, description, image_url, latitude, longitude, color, icon, visited_at
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return 0, err
+	}
+
+	rows, err := tx.Query(`
+		SELECT id, title, description, image_url, latitude, longitude, color, icon, visited_at
 		FROM pins
 		WHERE owner_key = ?
 		ORDER BY created_at DESC
 	`, sourceOwnerKey)
 	if err != nil {
+		tx.Rollback()
 		return 0, err
 	}
 	defer rows.Close()
 
-	tx, err := db.conn.Begin()
-	if err != nil {
-		return 0, err
-	}
 	stmt, err := tx.Prepare(`
 		INSERT INTO pins (owner_key, title, description, image_url, latitude, longitude, color, icon, visited_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -592,26 +731,80 @@ func (db *DB) ClonePinsToOwner(sourceOwnerKey, targetOwnerKey string, includePho
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	count := 0
+	pinIDMap := map[int64]int64{}
 	for rows.Next() {
+		var sourceID int64
 		var title, description, imageURL, color, icon, visitedAt string
 		var latitude, longitude float64
-		if err := rows.Scan(&title, &description, &imageURL, &latitude, &longitude, &color, &icon, &visitedAt); err != nil {
+		if err := rows.Scan(&sourceID, &title, &description, &imageURL, &latitude, &longitude, &color, &icon, &visitedAt); err != nil {
 			tx.Rollback()
 			return count, err
 		}
 		if !includePhotos {
 			imageURL = ""
 		}
-		if _, err := stmt.Exec(targetOwnerKey, title, description, imageURL, latitude, longitude, color, icon, visitedAt, now, now); err != nil {
+		result, err := stmt.Exec(targetOwnerKey, title, description, imageURL, latitude, longitude, color, icon, visitedAt, now, now)
+		if err != nil {
 			tx.Rollback()
 			return count, err
 		}
+		targetID, err := result.LastInsertId()
+		if err != nil {
+			tx.Rollback()
+			return count, err
+		}
+		pinIDMap[sourceID] = targetID
 		count++
 	}
 	if err := rows.Err(); err != nil {
 		tx.Rollback()
 		return count, err
 	}
+
+	routeRows, err := tx.Query(`
+		SELECT from_pin_id, to_pin_id, created_at
+		FROM route_connections
+		WHERE owner_key = ?
+		ORDER BY created_at ASC, id ASC
+	`, sourceOwnerKey)
+	if err != nil {
+		tx.Rollback()
+		return count, err
+	}
+	defer routeRows.Close()
+
+	routeStmt, err := tx.Prepare(`
+		INSERT INTO route_connections (owner_key, from_pin_id, to_pin_id, created_at)
+		VALUES (?, ?, ?, ?)
+	`)
+	if err != nil {
+		tx.Rollback()
+		return count, err
+	}
+	defer routeStmt.Close()
+
+	for routeRows.Next() {
+		var fromID, toID int64
+		var createdAt string
+		if err := routeRows.Scan(&fromID, &toID, &createdAt); err != nil {
+			tx.Rollback()
+			return count, err
+		}
+		mappedFrom, fromOK := pinIDMap[fromID]
+		mappedTo, toOK := pinIDMap[toID]
+		if !fromOK || !toOK {
+			continue
+		}
+		if _, err := routeStmt.Exec(targetOwnerKey, mappedFrom, mappedTo, createdAt); err != nil {
+			tx.Rollback()
+			return count, err
+		}
+	}
+	if err := routeRows.Err(); err != nil {
+		tx.Rollback()
+		return count, err
+	}
+
 	if err := tx.Commit(); err != nil {
 		return count, err
 	}

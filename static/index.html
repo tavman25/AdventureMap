@@ -28,7 +28,7 @@
       <span class="stat-divider">·</span>
       <span class="stat"><span id="countryCount">0</span> Countries</span>
       <span class="stat-divider">·</span>
-      <span class="stat" title="Estimated straight-line travel range based on saved pins">
+      <span class="stat" id="distanceStat" title="Estimated straight-line travel range based on saved pins">
         <span id="distanceRange">0-0</span> km
       </span>
     </div>
@@ -52,6 +52,14 @@
       <button class="btn btn-ghost admin-only-action" id="importBtn" onclick="showImportModal()" title="Import Google Maps JSON">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
         Import
+      </button>
+      <button class="btn btn-ghost admin-only-action" id="routeModeBtn" onclick="toggleRouteConnectMode()" title="Drag from one pin to another to connect your route">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm14 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM7.59 9.58l8.83 4.83 1-1.74-8.83-4.83z"/></svg>
+        Route Mode
+      </button>
+      <button class="btn btn-ghost admin-only-action" id="clearRouteBtn" onclick="clearAllRoutes()" title="Clear all connected route segments" style="display:none">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 4h10l1 2h4v2H2V6h4zm1 6h2v8H8zm6 0h2v8h-2z"/></svg>
+        Clear Route
       </button>
       <button class="btn btn-primary admin-only-action" id="addPinBtn" onclick="showAddModal()">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>

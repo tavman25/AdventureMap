@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/rand"
@@ -548,6 +549,91 @@ func (h *Handler) GetPin(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, pin)
+}
+
+// ListRoutes returns all route connections for the current owner.
+func (h *Handler) ListRoutes(c *gin.Context) {
+	ownerKey, ok := h.resolveOwnerKey(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "login required"})
+		return
+	}
+	routes, err := h.DB.ListRouteConnections(ownerKey)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, routes)
+}
+
+// CreateRoute creates a route connection between two pins.
+func (h *Handler) CreateRoute(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	var payload struct {
+		FromPinID int64 `json:"from_pin_id"`
+		ToPinID   int64 `json:"to_pin_id"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid route payload"})
+		return
+	}
+	if payload.FromPinID <= 0 || payload.ToPinID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from_pin_id and to_pin_id are required"})
+		return
+	}
+	if payload.FromPinID == payload.ToPinID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cannot connect a pin to itself"})
+		return
+	}
+
+	route, err := h.DB.CreateRouteConnection(ownerKey, payload.FromPinID, payload.ToPinID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "one or both pins were not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, route)
+}
+
+// DeleteRoute removes a route connection.
+func (h *Handler) DeleteRoute(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid route id"})
+		return
+	}
+	if err := h.DB.DeleteRouteConnection(ownerKey, id); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "route not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "route deleted"})
+}
+
+// ClearRoutes removes all route connections for the current owner.
+func (h *Handler) ClearRoutes(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	if err := h.DB.ClearRouteConnections(ownerKey); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "routes cleared"})
 }
 
 // CreatePin creates a new pin.

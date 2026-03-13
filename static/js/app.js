@@ -31,6 +31,10 @@ const state = {
   googleScriptLoaded: false,
   defaultTitle: '',
   profileTitle: '',
+  routeConnections: [],
+  routeConnectMode: false,
+  routeDragStartId: null,
+  routeGhostLine: null,
 };
 
 state.defaultTitle = document.querySelector('.logo-text')?.textContent || 'Travel Map';
@@ -161,6 +165,77 @@ const clusterGroup = L.markerClusterGroup({
 });
 map.addLayer(clusterGroup);
 
+const routeLayerGroup = L.layerGroup().addTo(map);
+
+function getPinById(pinID) {
+  return state.pins.find((pin) => pin.id === pinID) || null;
+}
+
+function buildRoutePolylinePoints(route) {
+  const fromPin = getPinById(route.from_pin_id);
+  const toPin = getPinById(route.to_pin_id);
+  if (!fromPin || !toPin) return null;
+  return [
+    [Number(fromPin.latitude), Number(fromPin.longitude)],
+    [Number(toPin.latitude), Number(toPin.longitude)],
+  ];
+}
+
+function renderRouteConnections() {
+  routeLayerGroup.clearLayers();
+
+  state.routeConnections.forEach((route, idx) => {
+    const points = buildRoutePolylinePoints(route);
+    if (!points) return;
+    const fromPin = getPinById(route.from_pin_id);
+    const toPin = getPinById(route.to_pin_id);
+
+    const line = L.polyline(points, {
+      color: '#ffd166',
+      weight: 3,
+      opacity: 0.9,
+      dashArray: '10 6',
+    });
+
+    line.bindTooltip(`Leg ${idx + 1}: ${fromPin?.title || route.from_pin_id} -> ${toPin?.title || route.to_pin_id}`, {
+      direction: 'center',
+      sticky: true,
+    });
+
+    if (state.isAdmin && state.routeConnectMode) {
+      line.on('click', async () => {
+        if (!confirm('Remove this route segment?')) return;
+        try {
+          await deleteRoute(route.id);
+          await loadRoutes();
+          showToast('Route segment removed', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    }
+
+    routeLayerGroup.addLayer(line);
+  });
+}
+
+function ensureRouteGhostLine() {
+  if (state.routeGhostLine) return state.routeGhostLine;
+  state.routeGhostLine = L.polyline([], {
+    color: '#fca311',
+    weight: 2,
+    opacity: 0.85,
+    dashArray: '5 5',
+    interactive: false,
+  }).addTo(map);
+  return state.routeGhostLine;
+}
+
+function clearRouteGhostLine() {
+  if (!state.routeGhostLine) return;
+  state.routeGhostLine.setLatLngs([]);
+}
+
 function capturePinFormDraft() {
   return {
     editingId: state.editingId,
@@ -201,6 +276,30 @@ map.on('click', (e) => {
     openModal('pinModal');
     showToast('Coordinates picked! Fill in the form and save.', 'success');
   }
+});
+
+map.on('mousemove', (e) => {
+  if (!state.routeConnectMode || !state.routeDragStartId) return;
+  const startPin = getPinById(state.routeDragStartId);
+  if (!startPin) {
+    state.routeDragStartId = null;
+    clearRouteGhostLine();
+    return;
+  }
+  const ghost = ensureRouteGhostLine();
+  ghost.setLatLngs([
+    [Number(startPin.latitude), Number(startPin.longitude)],
+    [e.latlng.lat, e.latlng.lng],
+  ]);
+});
+
+map.on('mouseup', () => {
+  // Delay cancellation so marker mouseup can complete a valid connection first.
+  setTimeout(() => {
+    if (!state.routeDragStartId) return;
+    state.routeDragStartId = null;
+    clearRouteGhostLine();
+  }, 0);
 });
 
 document.getElementById('coordHint').addEventListener('click', () => {
@@ -256,7 +355,17 @@ function buildPopupHTML(pin) {
 function addMarkerToMap(pin) {
   const marker = L.marker([pin.latitude, pin.longitude], { icon: createPinIcon(pin) });
   marker.bindPopup(buildPopupHTML(pin), { maxWidth: 280 });
+  marker.on('mousedown', (e) => {
+    handleRouteDragStart(pin.id, e.latlng);
+  });
+  marker.on('mouseup', async (e) => {
+    await handleRouteDragEnd(pin.id, e.latlng);
+  });
   marker.on('click', () => {
+    if (state.routeConnectMode) {
+      marker.closePopup();
+      return;
+    }
     state.activeId = pin.id;
     highlightSidebarCard(pin.id);
   });
@@ -284,6 +393,37 @@ async function fetchPins() {
   const res = await fetch('/api/pins');
   if (!res.ok) throw new Error('Failed to load pins');
   return res.json();
+}
+
+async function fetchRoutes() {
+  const res = await fetch('/api/routes');
+  if (!res.ok) throw new Error('Failed to load routes');
+  return res.json();
+}
+
+async function createRoute(payload) {
+  const res = await fetch('/api/routes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to create route');
+  return data;
+}
+
+async function deleteRoute(routeID) {
+  const res = await fetch(`/api/routes/${routeID}`, { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to delete route');
+  return data;
+}
+
+async function clearRoutesRequest() {
+  const res = await fetch('/api/routes', { method: 'DELETE' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to clear routes');
+  return data;
 }
 
 async function createPin(data) {
@@ -398,17 +538,112 @@ async function loadPins() {
     clusterGroup.clearLayers();
     state.markers = {};
     state.pins.forEach(addMarkerToMap);
+    renderRouteConnections();
     updateStats();
   } catch (err) {
     clusterGroup.clearLayers();
     state.markers = {};
     state.pins = [];
+    renderRouteConnections();
     renderSidebarPinList(state.pins);
     updateStats();
     if (state.authEnabled && /401|Failed to load pins/i.test(err.message)) {
       return;
     }
     showToast('Could not load pins: ' + err.message, 'error');
+  }
+}
+
+async function loadRoutes() {
+  try {
+    state.routeConnections = await fetchRoutes();
+  } catch (err) {
+    if (state.authEnabled && /401|Failed to load routes/i.test(err.message)) {
+      state.routeConnections = [];
+    } else {
+      state.routeConnections = [];
+      showToast('Could not load routes: ' + err.message, 'error');
+    }
+  }
+  renderRouteConnections();
+  updateStats();
+}
+
+function updateRouteModeUI() {
+  const routeModeBtn = document.getElementById('routeModeBtn');
+  const clearRouteBtn = document.getElementById('clearRouteBtn');
+  if (routeModeBtn) {
+    routeModeBtn.classList.toggle('active', state.routeConnectMode);
+    routeModeBtn.innerHTML = state.routeConnectMode
+      ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm14 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM7.59 9.58l8.83 4.83 1-1.74-8.83-4.83z"/></svg> Connecting...'
+      : '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm14 8a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM7.59 9.58l8.83 4.83 1-1.74-8.83-4.83z"/></svg> Route Mode';
+  }
+  if (clearRouteBtn) {
+    clearRouteBtn.style.display = state.routeConnectMode ? '' : 'none';
+  }
+}
+
+function toggleRouteConnectMode() {
+  if (!requireAdminAccess()) return;
+  state.routeConnectMode = !state.routeConnectMode;
+  state.routeDragStartId = null;
+  clearRouteGhostLine();
+  updateRouteModeUI();
+  renderRouteConnections();
+
+  if (state.routeConnectMode) {
+    showToast('Route mode ON: drag from one pin to another to create a travel leg.', 'success');
+  } else {
+    showToast('Route mode OFF', 'success');
+  }
+}
+
+function handleRouteDragStart(pinID, latlng) {
+  if (!state.routeConnectMode || !state.isAdmin) return;
+  state.routeDragStartId = pinID;
+  const ghost = ensureRouteGhostLine();
+  ghost.setLatLngs([
+    [latlng.lat, latlng.lng],
+    [latlng.lat, latlng.lng],
+  ]);
+}
+
+async function handleRouteDragEnd(pinID, latlng) {
+  if (!state.routeConnectMode || !state.isAdmin) return;
+  const startID = state.routeDragStartId;
+  state.routeDragStartId = null;
+  clearRouteGhostLine();
+
+  if (!startID || startID === pinID) return;
+
+  const exists = state.routeConnections.some((route) => route.from_pin_id === startID && route.to_pin_id === pinID);
+  if (exists) {
+    showToast('That route leg already exists', 'error');
+    return;
+  }
+
+  try {
+    await createRoute({ from_pin_id: startID, to_pin_id: pinID });
+    await loadRoutes();
+    const fromPin = getPinById(startID);
+    const toPin = getPinById(pinID);
+    showToast(`Connected ${fromPin?.title || 'start'} -> ${toPin?.title || 'end'}`, 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function clearAllRoutes() {
+  if (!requireAdminAccess()) return;
+  if (!confirm('Clear every connected route segment for your map?')) return;
+  try {
+    await clearRoutesRequest();
+    state.routeConnections = [];
+    renderRouteConnections();
+    updateStats();
+    showToast('All route segments cleared', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
   }
 }
 
@@ -534,7 +769,18 @@ function updateStats() {
 
 function updateDistanceStats() {
   const distanceEl = document.getElementById('distanceRange');
+  const distanceStat = document.getElementById('distanceStat');
   if (!distanceEl) return;
+
+  const routeKm = computeConnectedRouteDistanceKm(state.routeConnections, state.pins);
+  if (routeKm !== null) {
+    const routeMi = kmToMiles(routeKm);
+    distanceEl.textContent = formatDistance(routeKm);
+    if (distanceStat) {
+      distanceStat.title = `Connected route distance: ${formatDistance(routeKm)} km (${formatDistance(routeMi)} mi)`;
+    }
+    return;
+  }
 
   const estimates = computeDistanceEstimates(state.pins);
   const minKm = estimates.minKm;
@@ -543,7 +789,9 @@ function updateDistanceStats() {
   const maxMi = kmToMiles(maxKm);
 
   distanceEl.textContent = `${formatDistance(minKm)}-${formatDistance(maxKm)}`;
-  distanceEl.parentElement.title = `Estimated range: ${formatDistance(minKm)}-${formatDistance(maxKm)} km (${formatDistance(minMi)}-${formatDistance(maxMi)} mi)`;
+  if (distanceStat) {
+    distanceStat.title = `Estimated range: ${formatDistance(minKm)}-${formatDistance(maxKm)} km (${formatDistance(minMi)}-${formatDistance(maxMi)} mi)`;
+  }
 }
 
 function kmToMiles(km) {
@@ -577,6 +825,33 @@ function computeDistanceEstimates(pins) {
     minKm: mstKm,
     maxKm,
   };
+}
+
+function computeConnectedRouteDistanceKm(routeConnections, pins) {
+  if (!Array.isArray(routeConnections) || routeConnections.length === 0) {
+    return null;
+  }
+
+  const pinMap = new Map();
+  pins.forEach((pin) => {
+    const lat = Number(pin.latitude);
+    const lng = Number(pin.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    pinMap.set(pin.id, { lat, lng });
+  });
+
+  let total = 0;
+  let validLegs = 0;
+  routeConnections.forEach((route) => {
+    const from = pinMap.get(route.from_pin_id);
+    const to = pinMap.get(route.to_pin_id);
+    if (!from || !to) return;
+    total += haversineDistanceKm(from, to);
+    validLegs += 1;
+  });
+
+  if (validLegs === 0) return null;
+  return total;
 }
 
 function haversineDistanceKm(a, b) {
@@ -784,6 +1059,7 @@ async function savePin(e) {
     }
     renderSidebarPinList(state.pins);
     setVisibleMarkers(state.pins);
+    renderRouteConnections();
     updateStats();
     closePinModal();
   } catch (err) {
@@ -801,6 +1077,7 @@ async function deletePinById(id) {
     state.pins = state.pins.filter(p => p.id !== id);
     removeMarkerFromMap(id);
     renderSidebarPinList(state.pins);
+    await loadRoutes();
     updateStats();
     map.closePopup();
     showToast(`Removed "${pin.title}"`, 'success');
@@ -914,6 +1191,7 @@ async function acceptCloneInvite() {
   try {
     const result = await acceptCloneInviteRequest(token);
     await loadPins();
+    await loadRoutes();
     document.getElementById('cloneAcceptToken').value = '';
     await refreshCloneMeta();
     showToast(result.message || 'Map cloned successfully', 'success');
@@ -1320,6 +1598,14 @@ function updateAuthUI() {
     el.style.display = (!state.authEnabled || state.isAdmin) ? '' : 'none';
   });
 
+  if (!state.isAdmin) {
+    state.routeConnectMode = false;
+    state.routeDragStartId = null;
+    clearRouteGhostLine();
+  }
+  updateRouteModeUI();
+  renderRouteConnections();
+
   renderSidebarPinList(state.pins);
   refreshMarkerPopups();
 }
@@ -1352,12 +1638,15 @@ function handleAuthButtonClick() {
       await logoutAdmin();
       state.isAdmin = false;
       state.pins = [];
+      state.routeConnections = [];
       clusterGroup.clearLayers();
       state.markers = {};
       state.profileTitle = '';
       applyMapTitle('');
+      renderRouteConnections();
       updateAuthUI();
       renderSidebarPinList(state.pins);
+      updateStats();
       showToast('Logged out', 'success');
     })();
     return;
@@ -1382,6 +1671,7 @@ async function submitAdminLogin(event) {
     closeAuthModal();
     await loadProfileTitle();
     await loadPins();
+    await loadRoutes();
     showToast('Admin access enabled', 'success');
   } catch (err) {
     showToast(err.message, 'error');
@@ -1431,6 +1721,7 @@ async function ensureGoogleAuthReady() {
         closeAuthModal();
         await loadProfileTitle();
         await loadPins();
+        await loadRoutes();
         showToast('Signed in with Google', 'success');
       } catch (err) {
         showToast(err.message, 'error');
@@ -1722,9 +2013,11 @@ function getPinImages(pin) {
 async function bootstrapApp() {
   initSearchInput();
   updateSlideshowControls();
+  updateRouteModeUI();
   await initAuthState();
   await loadProfileTitle();
   await loadPins();
+  await loadRoutes();
   const params = new URLSearchParams(window.location.search);
   const tokenFromLink = params.get('cloneInvite');
   if (tokenFromLink) {

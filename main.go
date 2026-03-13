@@ -78,6 +78,7 @@ func main() {
 
 		api.GET("/pins", h.GetPins)
 		api.GET("/pins/:id", h.GetPin)
+		api.GET("/routes", h.ListRoutes)
 		api.GET("/profile", h.GetProfile)
 
 		superAdmin := api.Group("")
@@ -99,6 +100,9 @@ func main() {
 			admin.POST("/pins", h.CreatePin)
 			admin.PUT("/pins/:id", h.UpdatePin)
 			admin.DELETE("/pins/:id", h.DeletePin)
+			admin.POST("/routes", h.CreateRoute)
+			admin.DELETE("/routes/:id", h.DeleteRoute)
+			admin.DELETE("/routes", h.ClearRoutes)
 			admin.POST("/import/googlemaps", h.ImportGoogleMaps)
 			admin.POST("/import/photos", h.ImportPinPhotos)
 			admin.POST("/upload/image", h.UploadImage)

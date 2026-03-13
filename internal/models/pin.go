@@ -67,3 +67,12 @@ type UserProfile struct {
 	DisplayTitle string   `json:"display_title"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
+
+// RouteConnection represents a directed route segment between two pins.
+type RouteConnection struct {
+	ID        int64     `json:"id"`
+	OwnerKey  string    `json:"-"`
+	FromPinID int64     `json:"from_pin_id"`
+	ToPinID   int64     `json:"to_pin_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
