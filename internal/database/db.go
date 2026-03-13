@@ -119,6 +119,28 @@ func (db *DB) migrate() error {
 		log.Printf("migration clone_invites index error: %v", err)
 		return err
 	}
+
+	_, err = db.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS clone_events (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_owner_key TEXT  NOT NULL,
+			target_owner_key TEXT  NOT NULL,
+			invite_id      INTEGER NOT NULL,
+			cloned_count    INTEGER NOT NULL DEFAULT 0,
+			include_photos  INTEGER NOT NULL DEFAULT 0,
+			created_at      DATETIME NOT NULL
+		);
+	`)
+	if err != nil {
+		log.Printf("migration clone_events error: %v", err)
+		return err
+	}
+
+	_, err = db.conn.Exec(`CREATE INDEX IF NOT EXISTS idx_clone_events_source_owner ON clone_events(source_owner_key, created_at DESC)`)
+	if err != nil {
+		log.Printf("migration clone_events source index error: %v", err)
+		return err
+	}
 	return nil
 }
 
@@ -452,6 +474,60 @@ func (db *DB) GetCloneInviteByTokenHash(tokenHash string) (*models.CloneInvite, 
 	return &invite, nil
 }
 
+// ListCloneInvitesByOwner returns recent clone invites for an owner.
+func (db *DB) ListCloneInvitesByOwner(ownerKey string, limit int) ([]models.CloneInvite, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.conn.Query(`
+		SELECT id, owner_key, include_photos, expires_at, max_uses, used_count, revoked, created_at
+		FROM clone_invites
+		WHERE owner_key = ?
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, ownerKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	invites := []models.CloneInvite{}
+	for rows.Next() {
+		var invite models.CloneInvite
+		var includePhotos, revoked int
+		var expiresAt, createdAt string
+		if err := rows.Scan(&invite.ID, &invite.OwnerKey, &includePhotos, &expiresAt, &invite.MaxUses, &invite.UsedCount, &revoked, &createdAt); err != nil {
+			return nil, err
+		}
+		invite.IncludePhotos = includePhotos == 1
+		invite.Revoked = revoked == 1
+		invite.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
+		invite.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		invites = append(invites, invite)
+	}
+	return invites, rows.Err()
+}
+
+// RevokeCloneInvite marks a clone invite as revoked for the owner.
+func (db *DB) RevokeCloneInvite(ownerKey string, inviteID int64) error {
+	result, err := db.conn.Exec(`
+		UPDATE clone_invites
+		SET revoked = 1
+		WHERE id = ? AND owner_key = ?
+	`, inviteID, ownerKey)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // ConsumeCloneInvite increments used count if the invite is still valid.
 func (db *DB) ConsumeCloneInvite(id int64) error {
 	result, err := db.conn.Exec(`
@@ -528,6 +604,53 @@ func (db *DB) ClonePinsToOwner(sourceOwnerKey, targetOwnerKey string, includePho
 		return count, err
 	}
 	return count, nil
+}
+
+// LogCloneEvent stores a successful clone acceptance event.
+func (db *DB) LogCloneEvent(sourceOwnerKey, targetOwnerKey string, inviteID int64, clonedCount int, includePhotos bool) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO clone_events (source_owner_key, target_owner_key, invite_id, cloned_count, include_photos, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, sourceOwnerKey, targetOwnerKey, inviteID, clonedCount, boolToInt(includePhotos), time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// ListCloneEventsBySourceOwner returns clone history for a source owner.
+func (db *DB) ListCloneEventsBySourceOwner(sourceOwnerKey string, limit int) ([]map[string]interface{}, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.conn.Query(`
+		SELECT id, source_owner_key, target_owner_key, invite_id, cloned_count, include_photos, created_at
+		FROM clone_events
+		WHERE source_owner_key = ?
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, sourceOwnerKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []map[string]interface{}{}
+	for rows.Next() {
+		var id, inviteID int64
+		var sourceOwner, targetOwner, createdAt string
+		var clonedCount, includePhotosInt int
+		if err := rows.Scan(&id, &sourceOwner, &targetOwner, &inviteID, &clonedCount, &includePhotosInt, &createdAt); err != nil {
+			return nil, err
+		}
+		events = append(events, map[string]interface{}{
+			"id":             id,
+			"source_owner_key": sourceOwner,
+			"target_owner_key": targetOwner,
+			"invite_id":      inviteID,
+			"cloned_count":   clonedCount,
+			"include_photos": includePhotosInt == 1,
+			"created_at":     createdAt,
+		})
+	}
+	return events, rows.Err()
 }
 
 func normalizeStoredImageURLs(raw string) string {

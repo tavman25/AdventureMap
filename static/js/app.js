@@ -329,6 +329,27 @@ async function acceptCloneInviteRequest(inviteToken) {
   return data;
 }
 
+async function fetchCloneInvites() {
+  const res = await fetch('/api/clone/invites?limit=50');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to load clone invites');
+  return data.invites || [];
+}
+
+async function revokeCloneInviteRequest(inviteId) {
+  const res = await fetch(`/api/clone/invites/${inviteId}/revoke`, { method: 'POST' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to revoke invite');
+  return data;
+}
+
+async function fetchCloneEvents() {
+  const res = await fetch('/api/clone/events?limit=100');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to load clone activity');
+  return data.events || [];
+}
+
 // ─── Load & Render ───────────────────────────────────────────
 async function loadPins() {
   try {
@@ -645,6 +666,7 @@ function closeImportModal() { closeModal('importModal'); }
 function showCloneModal() {
   if (!requireAdminAccess()) return;
   openModal('cloneModal');
+  void refreshCloneMeta();
 }
 
 function closeCloneModal() {
@@ -662,14 +684,41 @@ async function createCloneInvite() {
     tokenField.focus();
     tokenField.select();
     showToast('Clone invite created. Share the token safely.', 'success');
+    await refreshCloneMeta();
   } catch (err) {
     showToast(err.message, 'error');
   }
 }
 
+function parseCloneTokenInput(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  try {
+    const asUrl = new URL(value);
+    return asUrl.searchParams.get('cloneInvite') || value;
+  } catch {
+    return value;
+  }
+}
+
+async function copyCloneInviteLink() {
+  const token = document.getElementById('cloneInviteToken').value.trim();
+  if (!token) {
+    showToast('Create an invite token first', 'error');
+    return;
+  }
+  const link = `${window.location.origin}${window.location.pathname}?cloneInvite=${encodeURIComponent(token)}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    showToast('Invite link copied', 'success');
+  } catch {
+    showToast('Could not copy to clipboard', 'error');
+  }
+}
+
 async function acceptCloneInvite() {
   if (!requireAdminAccess()) return;
-  const token = document.getElementById('cloneAcceptToken').value.trim();
+  const token = parseCloneTokenInput(document.getElementById('cloneAcceptToken').value);
   if (!token) {
     showToast('Paste an invite token first', 'error');
     return;
@@ -678,7 +727,74 @@ async function acceptCloneInvite() {
     const result = await acceptCloneInviteRequest(token);
     await loadPins();
     document.getElementById('cloneAcceptToken').value = '';
+    await refreshCloneMeta();
     showToast(result.message || 'Map cloned successfully', 'success');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+}
+
+function renderCloneInvites(invites) {
+  const list = document.getElementById('cloneInviteList');
+  if (!list) return;
+  if (!invites.length) {
+    list.innerHTML = '<div class="clone-empty">No invites created yet.</div>';
+    return;
+  }
+  list.innerHTML = invites.map((invite) => {
+    const status = invite.revoked
+      ? 'Revoked'
+      : (invite.used_count >= invite.max_uses ? 'Used' : (new Date(invite.expires_at) < new Date() ? 'Expired' : 'Active'));
+    const canRevoke = status === 'Active';
+    return `<div class="clone-item">
+      <div class="clone-item-main">
+        <div class="clone-item-title">Invite #${invite.id} <span class="clone-status ${status.toLowerCase()}">${status}</span></div>
+        <div class="clone-item-meta">Photos: ${invite.include_photos ? 'Yes' : 'No'} · Uses: ${invite.used_count}/${invite.max_uses} · Expires: ${formatDateTime(invite.expires_at)}</div>
+      </div>
+      ${canRevoke ? `<button class="btn btn-ghost" type="button" onclick="revokeCloneInvite(${invite.id})">Revoke</button>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderCloneEvents(events) {
+  const list = document.getElementById('cloneActivityList');
+  if (!list) return;
+  if (!events.length) {
+    list.innerHTML = '<div class="clone-empty">No clone activity yet.</div>';
+    return;
+  }
+  list.innerHTML = events.map((event) => `
+    <div class="clone-item">
+      <div class="clone-item-main">
+        <div class="clone-item-title">${escapeHTML(event.target_owner_key || 'unknown user')}</div>
+        <div class="clone-item-meta">${event.cloned_count} pin(s) · Photos: ${event.include_photos ? 'Yes' : 'No'} · ${formatDateTime(event.created_at)}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function refreshCloneMeta() {
+  if (!state.isAdmin) return;
+  try {
+    const [invites, events] = await Promise.all([fetchCloneInvites(), fetchCloneEvents()]);
+    renderCloneInvites(invites);
+    renderCloneEvents(events);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function revokeCloneInvite(inviteId) {
+  try {
+    await revokeCloneInviteRequest(inviteId);
+    showToast('Invite revoked', 'success');
+    await refreshCloneMeta();
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -1414,6 +1530,14 @@ async function bootstrapApp() {
   updateSlideshowControls();
   await initAuthState();
   await loadPins();
+  const params = new URLSearchParams(window.location.search);
+  const tokenFromLink = params.get('cloneInvite');
+  if (tokenFromLink) {
+    document.getElementById('cloneAcceptToken').value = tokenFromLink;
+    if (state.isAdmin) {
+      showCloneModal();
+    }
+  }
 }
 
 void bootstrapApp();

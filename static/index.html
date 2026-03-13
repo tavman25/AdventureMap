@@ -245,6 +245,9 @@
       </div>
       <button class="btn btn-primary" type="button" onclick="createCloneInvite()">Create Invite Token</button>
       <textarea id="cloneInviteToken" rows="2" readonly placeholder="Invite token appears here"></textarea>
+      <div class="clone-actions-row">
+        <button class="btn btn-ghost" type="button" onclick="copyCloneInviteLink()">Copy Invite Link</button>
+      </div>
     </div>
 
     <div class="clone-section clone-section-accept">
@@ -252,6 +255,20 @@
       <p class="clone-help">Paste a token to copy someone else's map into your account.</p>
       <textarea id="cloneAcceptToken" rows="2" placeholder="Paste invite token"></textarea>
       <button class="btn btn-ghost" type="button" onclick="acceptCloneInvite()">Accept & Clone</button>
+    </div>
+
+    <div class="clone-section">
+      <div class="clone-section-header">
+        <h4>My Invites</h4>
+        <button class="btn btn-ghost" type="button" onclick="refreshCloneMeta()">Refresh</button>
+      </div>
+      <div id="cloneInviteList" class="clone-list"></div>
+    </div>
+
+    <div class="clone-section clone-section-activity">
+      <h4>Clone Activity</h4>
+      <p class="clone-help">Shows who cloned your map and when.</p>
+      <div id="cloneActivityList" class="clone-list"></div>
     </div>
   </div>
 </div>

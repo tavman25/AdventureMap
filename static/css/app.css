@@ -597,6 +597,14 @@ html, body {
   margin-bottom: 6px;
 }
 
+.clone-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
 .clone-help {
   color: var(--text-muted);
   font-size: 0.8rem;
@@ -623,6 +631,76 @@ html, body {
   font-size: 0.82rem;
   font-family: 'Consolas', monospace;
   resize: vertical;
+}
+
+.clone-actions-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.clone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.clone-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  padding: 8px 10px;
+}
+
+.clone-item-main {
+  min-width: 0;
+}
+
+.clone-item-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.clone-item-meta {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  margin-top: 2px;
+}
+
+.clone-empty {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.clone-status {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.clone-status.active {
+  color: var(--success);
+  border-color: rgba(74,222,128,0.35);
+}
+
+.clone-status.used,
+.clone-status.expired,
+.clone-status.revoked {
+  color: var(--danger);
+  border-color: rgba(255,92,92,0.35);
 }
 
 /* ===== IMPORT MODAL ===== */

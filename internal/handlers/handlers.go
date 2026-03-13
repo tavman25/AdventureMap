@@ -294,11 +294,57 @@ func (h *Handler) CreateCloneInvite(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"invite_token":   inviteToken,
+		"invite_id":      invite.ID,
 		"include_photos": invite.IncludePhotos,
 		"expires_at":     invite.ExpiresAt,
 		"max_uses":       invite.MaxUses,
 		"used_count":     invite.UsedCount,
 	})
+}
+
+func (h *Handler) ListCloneInvites(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	invites, err := h.DB.ListCloneInvitesByOwner(ownerKey, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"invites": invites})
+}
+
+func (h *Handler) RevokeCloneInvite(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invite id"})
+		return
+	}
+	if err := h.DB.RevokeCloneInvite(ownerKey, id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "invite not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "invite revoked"})
+}
+
+func (h *Handler) GetCloneEvents(c *gin.Context) {
+	ownerKey, ok := h.requireOwnerKey(c)
+	if !ok {
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	events, err := h.DB.ListCloneEventsBySourceOwner(ownerKey, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events})
 }
 
 func (h *Handler) AcceptCloneInvite(c *gin.Context) {
@@ -352,6 +398,7 @@ func (h *Handler) AcceptCloneInvite(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	_ = h.DB.LogCloneEvent(invite.OwnerKey, targetOwnerKey, invite.ID, clonedCount, invite.IncludePhotos)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":         fmt.Sprintf("Cloned %d pin(s)", clonedCount),
