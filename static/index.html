@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Travel Map ✈️</title>
+  <title>Bill and Donna's Travels</title>
 
   <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -21,7 +21,7 @@
   <div class="header-content">
     <div class="logo">
       <span class="logo-icon">🌍</span>
-      <span class="logo-text">Travel Map</span>
+      <span class="logo-text">Bill and Donna's Travels</span>
     </div>
     <div class="header-stats" id="headerStats">
       <span class="stat"><span id="pinCount">0</span> Places visited</span>
@@ -51,7 +51,7 @@
     <button class="sidebar-toggle" onclick="toggleSidebar()" title="Collapse sidebar">‹</button>
   </div>
   <div class="sidebar-search">
-    <input type="text" id="searchInput" placeholder="Search places…" oninput="filterPins(this.value)" />
+    <input type="text" id="searchInput" placeholder="Filter pins, or press Enter to search world place..." oninput="filterPins(this.value)" />
   </div>
   <div id="pinList" class="pin-list"></div>
 </aside>
@@ -95,6 +95,21 @@
       <div class="form-group">
         <label>Description</label>
         <textarea id="pinDescription" rows="2" placeholder="What made this place special?"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Photo URL</label>
+        <div class="upload-row">
+          <input type="url" id="pinImageUrl" placeholder="https://example.com/my-trip-photo.jpg" />
+          <button type="button" class="btn btn-ghost upload-btn" onclick="addImageURLToPinList()">Add URL</button>
+        </div>
+        <div class="upload-row">
+          <label class="btn btn-ghost upload-btn">
+            Upload From Device
+            <input type="file" id="pinImageFile" accept="image/*" multiple style="display:none" onchange="uploadPinImageFromDevice(event)" />
+          </label>
+          <span id="pinImageUploadStatus" class="upload-status">No file uploaded</span>
+        </div>
+        <div id="pinImageList" class="pin-image-list"></div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -176,6 +191,35 @@
 
 <!-- ===== TOAST ===== -->
 <div id="toast" class="toast"></div>
+
+<!-- ===== GALLERY MODAL ===== -->
+<div class="modal-overlay" id="galleryModal">
+  <div class="modal glass gallery-modal">
+    <div class="modal-header">
+      <h3 id="galleryTitle">Photos</h3>
+      <button class="modal-close" onclick="closeGalleryModal()">✕</button>
+    </div>
+    <div id="galleryGrid" class="gallery-grid"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="lightboxModal">
+  <div class="modal glass lightbox-modal">
+    <div class="modal-header">
+      <h3 id="lightboxTitle">Photo</h3>
+      <button class="modal-close" onclick="closeLightboxModal()">✕</button>
+    </div>
+    <div class="lightbox-stage">
+      <button type="button" class="lightbox-nav lightbox-nav-prev" onclick="showPreviousLightboxImage()" aria-label="Previous photo">‹</button>
+      <img id="lightboxImage" class="lightbox-image" src="" alt="Expanded travel photo" />
+      <button type="button" class="lightbox-nav lightbox-nav-next" onclick="showNextLightboxImage()" aria-label="Next photo">›</button>
+    </div>
+    <div class="lightbox-meta">
+      <span id="lightboxCounter">1 / 1</span>
+      <span class="lightbox-hint">Use arrow keys or buttons to browse photos</span>
+    </div>
+  </div>
+</div>
 
 <!-- Leaflet JS -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

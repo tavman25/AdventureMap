@@ -29,6 +29,9 @@ func main() {
 	if err := os.MkdirAll("./data", 0755); err != nil {
 		log.Fatalf("failed to create data directory: %v", err)
 	}
+	if err := os.MkdirAll("./data/uploads", 0755); err != nil {
+		log.Fatalf("failed to create uploads directory: %v", err)
+	}
 
 	// Initialize database
 	db, err := database.New(dbPath)
@@ -37,6 +40,11 @@ func main() {
 	}
 	defer db.Close()
 	log.Printf("database ready at %s", dbPath)
+	if repaired, err := db.NormalizePinImageURLs(); err != nil {
+		log.Printf("image URL cleanup failed: %v", err)
+	} else if repaired > 0 {
+		log.Printf("repaired malformed image URLs on %d pin(s)", repaired)
+	}
 
 	// Initialize handlers
 	h := handlers.New(db)
@@ -62,7 +70,12 @@ func main() {
 		api.PUT("/pins/:id", h.UpdatePin)
 		api.DELETE("/pins/:id", h.DeletePin)
 		api.POST("/import/googlemaps", h.ImportGoogleMaps)
+		api.POST("/import/photos", h.ImportPinPhotos)
+		api.POST("/upload/image", h.UploadImage)
 	}
+
+	// Serve uploaded images from disk.
+	r.Static("/uploads", "./data/uploads")
 
 	// Serve embedded static files (HTML, CSS, JS)
 	stripped, err := fs.Sub(staticFiles, "static")

@@ -98,6 +98,7 @@ html, body {
   right: 0;
   bottom: 0;
   z-index: 1;
+  background: #0b1226;
 }
 
 /* Leaflet dark tiles tint */
@@ -117,7 +118,11 @@ html, body {
   transition: all 0.2s ease;
   white-space: nowrap;
   font-family: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
+
+.btn:active { transform: scale(0.98); }
 
 .btn-primary {
   background: linear-gradient(135deg, #7c83ff, #c084fc);
@@ -444,6 +449,98 @@ html, body {
   margin-bottom: 16px;
 }
 
+.upload-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.upload-btn {
+  padding: 6px 12px;
+  font-size: 0.78rem;
+}
+
+.upload-status {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.pin-image-list {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.pin-image-item {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.03);
+  cursor: grab;
+}
+
+.pin-image-item:active { cursor: grabbing; }
+
+.pin-image-item.cover {
+  border-color: rgba(255, 215, 0, 0.7);
+  box-shadow: 0 0 0 1px rgba(255, 215, 0, 0.35) inset;
+}
+
+.pin-image-item img {
+  width: 100%;
+  height: 82px;
+  object-fit: cover;
+  display: block;
+}
+
+.pin-image-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-size: 0.66rem;
+  background: rgba(10,14,26,0.82);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.pin-image-actions {
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+}
+
+.pin-image-actions button {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+.pin-image-actions button:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.08);
+}
+
+.pin-image-empty {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  grid-column: 1 / -1;
+  text-align: center;
+}
+
 .modal-actions {
   display: flex;
   gap: 10px;
@@ -547,10 +644,128 @@ html, body {
 .popup-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .popup-icon { font-size: 1.4rem; }
 .popup-title { font-weight: 700; font-size: 0.95rem; }
+.popup-photo-wrap {
+  all: unset;
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  margin: 4px 0 8px;
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.popup-photo {
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+.popup-photo-count {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  background: rgba(10,14,26,0.82);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.72rem;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
 .popup-desc { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 8px; line-height: 1.5; }
 .popup-meta { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px; display: flex; gap: 10px; }
 .popup-actions { display: flex; gap: 8px; }
 .popup-actions button { font-size: 0.78rem; padding: 5px 12px; }
+
+.gallery-modal {
+  max-width: 860px;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.gallery-grid button {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.25);
+  cursor: pointer;
+}
+
+.gallery-grid img {
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.2s ease;
+}
+
+.gallery-grid button:hover img {
+  transform: scale(1.03);
+}
+
+.lightbox-modal {
+  max-width: 1100px;
+  width: min(92vw, 1100px);
+}
+
+.lightbox-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 40vh;
+}
+
+.lightbox-nav {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(16, 20, 42, 0.85);
+  color: var(--text);
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.lightbox-nav:hover {
+  background: var(--surface-hover);
+}
+
+.lightbox-image {
+  width: calc(100% - 108px);
+  max-height: 72vh;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,0.25);
+}
+
+.lightbox-meta {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+#lightboxCounter {
+  color: var(--text);
+  font-weight: 600;
+}
 
 /* ===== CUSTOM PIN MARKERS ===== */
 .custom-pin {
@@ -615,4 +830,12 @@ html, body {
   .header-stats { display: none; }
   .form-row { grid-template-columns: 1fr; }
   .modal { padding: 20px; }
+  .lightbox-stage { gap: 8px; }
+  .lightbox-nav {
+    width: 36px;
+    height: 36px;
+    font-size: 1.3rem;
+  }
+  .lightbox-image { width: calc(100% - 88px); }
+  .lightbox-hint { display: none; }
 }

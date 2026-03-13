@@ -10,15 +10,115 @@ const state = {
   activeId:     null,    // currently selected pin id
   addClickMode: false,   // whether next map click sets coords
   editingId:    null,    // pin being edited (null = new)
+  pendingPickDraft: null,
+  pinImageList: [],
+  draggedImageIndex: null,
+  countryCache: null,
+  countryLookupInFlight: {},
+  statsRunId: 0,
+  lightboxImages: [],
+  lightboxIndex: 0,
+  lightboxTitleBase: 'Photo',
 };
 
+const COUNTRY_CACHE_KEY = 'travel-map-country-cache-v1';
+
+function loadCountryCache() {
+  try {
+    const raw = localStorage.getItem(COUNTRY_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCountryCache() {
+  try {
+    localStorage.setItem(COUNTRY_CACHE_KEY, JSON.stringify(state.countryCache));
+  } catch {
+    // Ignore quota/storage errors.
+  }
+}
+
+state.countryCache = loadCountryCache();
+
+function getPinCountryCacheKey(pin) {
+  const lat = Number(pin.latitude).toFixed(4);
+  const lng = Number(pin.longitude).toFixed(4);
+  return `${lat},${lng}`;
+}
+
+function getCachedCountryCode(pin) {
+  const key = getPinCountryCacheKey(pin);
+  return state.countryCache[key] || '';
+}
+
+function setCachedCountryCode(pin, countryCode) {
+  const key = getPinCountryCacheKey(pin);
+  state.countryCache[key] = countryCode;
+  saveCountryCache();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resolveCountryCode(pin) {
+  const cached = getCachedCountryCode(pin);
+  if (cached) return cached;
+
+  const key = getPinCountryCacheKey(pin);
+  if (state.countryLookupInFlight[key]) {
+    return state.countryLookupInFlight[key];
+  }
+
+  const lookupPromise = (async () => {
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=3&addressdetails=1&lat=${encodeURIComponent(pin.latitude)}&lon=${encodeURIComponent(pin.longitude)}`;
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+      if (!res.ok) return '';
+      const data = await res.json();
+      const code = String(data?.address?.country_code || '').toUpperCase();
+      if (code) {
+        setCachedCountryCode(pin, code);
+      }
+      return code;
+    } catch {
+      return '';
+    } finally {
+      delete state.countryLookupInFlight[key];
+    }
+  })();
+
+  state.countryLookupInFlight[key] = lookupPromise;
+  return lookupPromise;
+}
+
+function getViewportMinZoom() {
+  const worldPixelWidthAtZoom0 = 256;
+  const viewportWidth = Math.max(window.innerWidth, 1024);
+  const calculated = Math.ceil(Math.log2(viewportWidth / worldPixelWidthAtZoom0));
+  return Math.max(2, Math.min(calculated, 5));
+}
+
 // ─── Map initialisation ──────────────────────────────────────
+const viewportMinZoom = getViewportMinZoom();
 const map = L.map('map', {
   center: [20, 0],
-  zoom: 2,
-  minZoom: 2,
+  zoom: viewportMinZoom,
+  minZoom: viewportMinZoom,
+  maxZoom: 19,
   zoomControl: true,
   attributionControl: true,
+  worldCopyJump: false,
+  maxBounds: [[-90, -180], [90, 180]],
+  maxBoundsViscosity: 1.0,
 });
 
 // Dark base tile layer (CartoDB Dark)
@@ -26,7 +126,17 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
   subdomains: 'abcd',
   maxZoom: 19,
+  noWrap: true,
+  bounds: [[-90, -180], [90, 180]],
 }).addTo(map);
+
+window.addEventListener('resize', () => {
+  const nextMinZoom = getViewportMinZoom();
+  map.setMinZoom(nextMinZoom);
+  if (map.getZoom() < nextMinZoom) {
+    map.setZoom(nextMinZoom);
+  }
+});
 
 // MarkerCluster group
 const clusterGroup = L.markerClusterGroup({
@@ -37,20 +147,53 @@ const clusterGroup = L.markerClusterGroup({
 });
 map.addLayer(clusterGroup);
 
+function capturePinFormDraft() {
+  return {
+    editingId: state.editingId,
+    title: document.getElementById('pinTitle').value,
+    description: document.getElementById('pinDescription').value,
+    imageUrl: document.getElementById('pinImageUrl').value,
+    imageList: [...state.pinImageList],
+    color: document.getElementById('pinColor').value,
+    icon: document.getElementById('pinIcon').value,
+    visitedAt: document.getElementById('pinVisitedAt').value,
+  };
+}
+
+function restorePinFormDraftWithCoords(draft, lat, lng) {
+  state.editingId = draft?.editingId || null;
+  document.getElementById('modalTitle').textContent = state.editingId ? '✏️ Edit Pin' : '📍 New Pin';
+  document.getElementById('pinTitle').value = draft?.title || '';
+  document.getElementById('pinDescription').value = draft?.description || '';
+  document.getElementById('pinImageUrl').value = draft?.imageUrl || '';
+  state.pinImageList = Array.isArray(draft?.imageList) ? [...draft.imageList] : [];
+  renderPinImageListEditor();
+  document.getElementById('pinColor').value = draft?.color || '#FF5722';
+  document.getElementById('pinIcon').value = draft?.icon || '📍';
+  document.getElementById('pinVisitedAt').value = draft?.visitedAt || '';
+  document.getElementById('pinLat').value = lat.toFixed(6);
+  document.getElementById('pinLng').value = lng.toFixed(6);
+  document.getElementById('coordHint').textContent = `✅ Coordinates set: ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+}
+
 // Map click handler (for placing pins)
 map.on('click', (e) => {
   if (state.addClickMode) {
-    document.getElementById('pinLat').value = e.latlng.lat.toFixed(6);
-    document.getElementById('pinLng').value = e.latlng.lng.toFixed(6);
+    const draft = state.pendingPickDraft;
+    restorePinFormDraftWithCoords(draft, e.latlng.lat, e.latlng.lng);
     state.addClickMode = false;
-    document.getElementById('coordHint').textContent = `✅ Coordinates set: ${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+    state.pendingPickDraft = null;
+    map.getContainer().style.cursor = '';
+    openModal('pinModal');
     showToast('Coordinates picked! Fill in the form and save.', 'success');
   }
 });
 
 document.getElementById('coordHint').addEventListener('click', () => {
+  state.pendingPickDraft = capturePinFormDraft();
   state.addClickMode = true;
-  document.getElementById('coordHint').textContent = '🖱️ Click on the map to set coordinates…';
+  map.getContainer().style.cursor = 'crosshair';
+  closePinModal(true);
   showToast('Click anywhere on the map to set coordinates');
 });
 
@@ -70,6 +213,8 @@ function createPinIcon(pin) {
 function buildPopupHTML(pin) {
   const lat  = parseFloat(pin.latitude).toFixed(4);
   const lng  = parseFloat(pin.longitude).toFixed(4);
+  const images = getPinImages(pin);
+  const imageURL = images[0] || '';
   const meta = [
     pin.visited_at ? `🗓 ${pin.visited_at}` : '',
     `📌 ${lat}, ${lng}`,
@@ -81,6 +226,10 @@ function buildPopupHTML(pin) {
         <span class="popup-icon">${pin.icon || '📍'}</span>
         <span class="popup-title">${escapeHTML(pin.title)}</span>
       </div>
+      ${imageURL ? `<button type="button" class="popup-photo-wrap" onclick="openGalleryForPin(${pin.id})" title="View photo gallery">
+        <img class="popup-photo" src="${imageURL}" alt="${escapeHTML(pin.title)}" loading="lazy" referrerpolicy="no-referrer" />
+        ${images.length > 1 ? `<span class="popup-photo-count">${images.length} photos</span>` : `<span class="popup-photo-count">Open photo</span>`}
+      </button>` : ''}
       ${pin.description ? `<p class="popup-desc">${escapeHTML(pin.description)}</p>` : ''}
       <div class="popup-meta">${meta}</div>
       <div class="popup-actions">
@@ -177,21 +326,113 @@ function renderSidebarPinList(pins) {
     </div>`).join('');
 }
 
+function setVisibleMarkers(pinsToShow) {
+  const visibleIds = new Set(pinsToShow.map(p => p.id));
+  state.pins.forEach((pin) => {
+    const marker = state.markers[pin.id];
+    if (!marker) return;
+    const shouldShow = visibleIds.has(pin.id);
+    const isShown = clusterGroup.hasLayer(marker);
+    if (shouldShow && !isShown) clusterGroup.addLayer(marker);
+    if (!shouldShow && isShown) clusterGroup.removeLayer(marker);
+  });
+}
+
 function filterPins(query) {
-  const q = query.toLowerCase();
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    renderSidebarPinList(state.pins);
+    setVisibleMarkers(state.pins);
+    return;
+  }
   const filtered = state.pins.filter(p =>
     p.title.toLowerCase().includes(q) ||
     (p.description || '').toLowerCase().includes(q) ||
     (p.visited_at || '').toLowerCase().includes(q)
   );
-  renderSidebarPinList(filtered);
+  if (!filtered.length) {
+    const list = document.getElementById('pinList');
+    list.innerHTML = `<div class="empty-state">
+      <span class="empty-icon">🔎</span>
+      <p>No saved pin matches.<br>Press <strong>Enter</strong> to search the world map for this place.</p>
+    </div>`;
+    // Keep map pins visible even when local sidebar results are empty.
+    setVisibleMarkers(state.pins);
+  } else {
+    renderSidebarPinList(filtered);
+    setVisibleMarkers(filtered);
+  }
+}
+
+async function searchWorldPlace(query) {
+  const q = query.trim();
+  if (!q) return;
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`;
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) throw new Error('Search service unavailable');
+    const results = await res.json();
+    if (!Array.isArray(results) || !results.length) {
+      showToast('No world place found for that search', 'error');
+      return;
+    }
+    const first = results[0];
+    const lat = parseFloat(first.lat);
+    const lng = parseFloat(first.lon);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      showToast('Found result but coordinates were invalid', 'error');
+      return;
+    }
+    const searchInput = document.getElementById('searchInput');
+    searchInput.value = '';
+    filterPins('');
+    map.flyTo([lat, lng], Math.max(map.getZoom(), 8), { animate: true, duration: 1.2 });
+    setTimeout(() => showAddModal(lat, lng), 700);
+    showToast(`Found ${first.display_name.split(',')[0]}. Add a pin if you like.`, 'success');
+  } catch (err) {
+    showToast(`Place search failed: ${err.message}`, 'error');
+  }
+}
+
+function initSearchInput() {
+  const searchInput = document.getElementById('searchInput');
+  searchInput.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    await searchWorldPlace(searchInput.value);
+  });
 }
 
 function updateStats() {
+  void updateCountryStatsAsync();
+}
+
+async function updateCountryStatsAsync() {
+  const runId = ++state.statsRunId;
   document.getElementById('pinCount').textContent = state.pins.length;
-  // Rough country count: cluster unique ~1° lat/lng cells as proxy
-  const buckets = new Set(state.pins.map(p => `${Math.round(p.latitude/5)},${Math.round(p.longitude/5)}`));
-  document.getElementById('countryCount').textContent = buckets.size;
+
+  const countryCodes = new Set();
+  for (const pin of state.pins) {
+    const cachedCode = getCachedCountryCode(pin);
+    if (cachedCode) countryCodes.add(cachedCode);
+  }
+  document.getElementById('countryCount').textContent = countryCodes.size;
+
+  const missingPins = state.pins.filter((pin) => !getCachedCountryCode(pin));
+  for (const pin of missingPins) {
+    const code = await resolveCountryCode(pin);
+    if (runId !== state.statsRunId) return;
+    if (code) {
+      countryCodes.add(code);
+      document.getElementById('countryCount').textContent = countryCodes.size;
+    }
+    // Keep requests gentle to avoid geocoder throttling.
+    await delay(300);
+  }
 }
 
 // ─── Sidebar Navigation ──────────────────────────────────────
@@ -217,11 +458,15 @@ function highlightSidebarCard(id) {
 function showAddModal(lat, lng) {
   state.editingId = null;
   state.addClickMode = false;
+  state.pendingPickDraft = null;
   document.getElementById('modalTitle').textContent = '📍 New Pin';
   document.getElementById('pinForm').reset();
   document.getElementById('pinId').value = '';
   document.getElementById('pinColor').value = '#FF5722';
   document.getElementById('pinIcon').value = '📍';
+  state.pinImageList = [];
+  renderPinImageListEditor();
+  document.getElementById('pinImageUploadStatus').textContent = 'No file uploaded';
   document.getElementById('coordHint').textContent = '💡 Or click anywhere on the map to set coordinates';
   if (lat !== undefined) {
     document.getElementById('pinLat').value = lat.toFixed(6);
@@ -234,28 +479,43 @@ function editPinById(id) {
   const pin = state.pins.find(p => p.id === id);
   if (!pin) return;
   state.editingId = id;
+  state.pendingPickDraft = null;
   document.getElementById('modalTitle').textContent = '✏️ Edit Pin';
   document.getElementById('pinId').value   = pin.id;
   document.getElementById('pinTitle').value       = pin.title;
   document.getElementById('pinDescription').value = pin.description || '';
+  const images = getPinImages(pin);
+  state.pinImageList = [...images];
+  document.getElementById('pinImageUrl').value    = '';
+  renderPinImageListEditor();
   document.getElementById('pinLat').value         = pin.latitude;
   document.getElementById('pinLng').value         = pin.longitude;
   document.getElementById('pinColor').value       = pin.color || '#FF5722';
   document.getElementById('pinIcon').value        = pin.icon || '📍';
   document.getElementById('pinVisitedAt').value   = pin.visited_at || '';
+  document.getElementById('pinImageUploadStatus').textContent = images.length ? `${images.length} image(s) set` : 'No file uploaded';
   openModal('pinModal');
 }
 
-function closePinModal() {
+function closePinModal(keepAddClickMode = false) {
   closeModal('pinModal');
-  state.addClickMode = false;
+  if (!keepAddClickMode) {
+    state.addClickMode = false;
+    state.pendingPickDraft = null;
+    map.getContainer().style.cursor = '';
+  }
 }
 
 async function savePin(e) {
   e.preventDefault();
+  const pendingTypedURLs = parseImageURLList(document.getElementById('pinImageUrl').value);
+  state.pinImageList = dedupeStrings(state.pinImageList.concat(pendingTypedURLs));
+  document.getElementById('pinImageUrl').value = '';
+  renderPinImageListEditor();
   const data = {
     title:       document.getElementById('pinTitle').value.trim(),
     description: document.getElementById('pinDescription').value.trim(),
+    image_url:   state.pinImageList.join('\n'),
     latitude:    parseFloat(document.getElementById('pinLat').value),
     longitude:   parseFloat(document.getElementById('pinLng').value),
     color:       document.getElementById('pinColor').value,
@@ -279,6 +539,7 @@ async function savePin(e) {
       showToast(`Added "${created.title}" 📍`, 'success');
     }
     renderSidebarPinList(state.pins);
+    setVisibleMarkers(state.pins);
     updateStats();
     closePinModal();
   } catch (err) {
@@ -372,6 +633,204 @@ async function submitImport() {
   }
 }
 
+async function submitPhotoImport() {
+  showToast('Photo JSON import was replaced. Use Upload From Device in the pin form.', 'error');
+}
+
+async function uploadPinImageFromDevice(event) {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+
+  const statusEl = document.getElementById('pinImageUploadStatus');
+  statusEl.textContent = `Uploading ${files.length} file(s)...`;
+
+  const uploadedURLs = [];
+
+  try {
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append('image', file);
+      const res = await fetch('/api/upload/image', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      const normalized = normalizeImageURL(data.url || '');
+      if (normalized) uploadedURLs.push(normalized);
+    }
+
+    const merged = dedupeStrings(state.pinImageList.concat(uploadedURLs));
+    state.pinImageList = merged;
+    renderPinImageListEditor();
+    document.getElementById('pinImageUrl').value = '';
+    statusEl.textContent = `${uploadedURLs.length} image(s) uploaded`;
+    showToast('Photos uploaded. Save pin to attach them.', 'success');
+  } catch (err) {
+    statusEl.textContent = 'Upload failed';
+    showToast(`Upload failed: ${err.message}`, 'error');
+  } finally {
+    event.target.value = '';
+  }
+}
+
+function addImageURLToPinList() {
+  const input = document.getElementById('pinImageUrl');
+  const toAdd = parseImageURLList(input.value);
+  if (!toAdd.length) {
+    showToast('Enter a valid image URL first', 'error');
+    return;
+  }
+  state.pinImageList = dedupeStrings(state.pinImageList.concat(toAdd));
+  input.value = '';
+  renderPinImageListEditor();
+  showToast('Image URL added', 'success');
+}
+
+function renderPinImageListEditor() {
+  const container = document.getElementById('pinImageList');
+  if (!container) return;
+  if (!state.pinImageList.length) {
+    container.innerHTML = '<div class="pin-image-empty">No photos yet. Upload or add a URL, then drag to reorder.</div>';
+    return;
+  }
+  container.innerHTML = state.pinImageList.map((url, idx) => `
+    <div class="pin-image-item ${idx === 0 ? 'cover' : ''}" draggable="true"
+      ondragstart="startPinImageDrag(event, ${idx})"
+      ondragover="allowPinImageDrop(event)"
+      ondrop="dropPinImageAt(event, ${idx})">
+      <img src="${url}" alt="Pin photo ${idx + 1}" loading="lazy" referrerpolicy="no-referrer" />
+      <span class="pin-image-badge">${idx === 0 ? 'Cover' : `#${idx + 1}`}</span>
+      <div class="pin-image-actions">
+        <button type="button" onclick="setCoverImage(${idx})">Cover</button>
+        <button type="button" onclick="removePinImage(${idx})">Remove</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function startPinImageDrag(event, index) {
+  state.draggedImageIndex = index;
+  event.dataTransfer.effectAllowed = 'move';
+}
+
+function allowPinImageDrop(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+}
+
+function dropPinImageAt(event, dropIndex) {
+  event.preventDefault();
+  const from = state.draggedImageIndex;
+  state.draggedImageIndex = null;
+  if (from === null || from === dropIndex) return;
+  const moved = state.pinImageList.splice(from, 1)[0];
+  state.pinImageList.splice(dropIndex, 0, moved);
+  renderPinImageListEditor();
+}
+
+function setCoverImage(index) {
+  if (index <= 0 || index >= state.pinImageList.length) return;
+  const selected = state.pinImageList.splice(index, 1)[0];
+  state.pinImageList.unshift(selected);
+  renderPinImageListEditor();
+  showToast('Cover photo updated', 'success');
+}
+
+function removePinImage(index) {
+  state.pinImageList.splice(index, 1);
+  renderPinImageListEditor();
+}
+
+function openGalleryForPin(id) {
+  const pin = state.pins.find((p) => p.id === id);
+  if (!pin) return;
+  const images = getPinImages(pin);
+  if (!images.length) {
+    showToast('No photos available for this pin', 'error');
+    return;
+  }
+
+  state.lightboxImages = images;
+  state.lightboxTitleBase = pin.title;
+  state.lightboxIndex = 0;
+
+  document.getElementById('galleryTitle').textContent = `${pin.title} - Photo Gallery`;
+  document.getElementById('galleryGrid').innerHTML = images.map((url, idx) =>
+    `<button type="button" onclick="openLightboxModal(${idx})" title="Open photo ${idx + 1}">
+      <img src="${url}" alt="${escapeHTML(pin.title)} photo ${idx + 1}" loading="lazy" referrerpolicy="no-referrer" />
+    </button>`
+  ).join('');
+  openModal('galleryModal');
+}
+
+function closeGalleryModal() {
+  closeModal('galleryModal');
+}
+
+function isModalOpen(id) {
+  const modal = document.getElementById(id);
+  return !!modal && modal.classList.contains('open');
+}
+
+function setLightboxImage(index) {
+  if (!state.lightboxImages.length) return;
+  const total = state.lightboxImages.length;
+  const normalizedIndex = ((index % total) + total) % total;
+  state.lightboxIndex = normalizedIndex;
+
+  const image = document.getElementById('lightboxImage');
+  const title = document.getElementById('lightboxTitle');
+  const counter = document.getElementById('lightboxCounter');
+
+  image.src = state.lightboxImages[normalizedIndex];
+  image.alt = `${state.lightboxTitleBase} photo ${normalizedIndex + 1}`;
+  title.textContent = `${state.lightboxTitleBase} - Photo ${normalizedIndex + 1}`;
+  counter.textContent = `${normalizedIndex + 1} / ${total}`;
+}
+
+function openLightboxModal(indexOrUrl = 0, title = 'Photo', index = 1) {
+  if (typeof indexOrUrl === 'string') {
+    const normalized = normalizeImageURL(indexOrUrl);
+    if (!normalized) return;
+    state.lightboxImages = [normalized];
+    state.lightboxTitleBase = title || 'Photo';
+    state.lightboxIndex = Math.max(0, Number(index) - 1);
+  } else {
+    state.lightboxIndex = Number(indexOrUrl) || 0;
+    if (!state.lightboxTitleBase) {
+      state.lightboxTitleBase = title || 'Photo';
+    }
+  }
+
+  if (!state.lightboxImages.length) {
+    showToast('No photos available for this pin', 'error');
+    return;
+  }
+
+  openModal('lightboxModal');
+  setLightboxImage(state.lightboxIndex);
+}
+
+function showNextLightboxImage() {
+  if (!isModalOpen('lightboxModal')) return;
+  setLightboxImage(state.lightboxIndex + 1);
+}
+
+function showPreviousLightboxImage() {
+  if (!isModalOpen('lightboxModal')) return;
+  setLightboxImage(state.lightboxIndex - 1);
+}
+
+function closeLightboxModal() {
+  document.getElementById('lightboxImage').src = '';
+  document.getElementById('lightboxCounter').textContent = '1 / 1';
+  state.lightboxImages = [];
+  state.lightboxIndex = 0;
+  state.lightboxTitleBase = 'Photo';
+  closeModal('lightboxModal');
+}
+
 // ─── Sidebar toggle ───────────────────────────────────────────
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
@@ -391,7 +850,8 @@ function openModal(id) {
 function closeModal(id) {
   const el = document.getElementById(id);
   el.classList.remove('open');
-  el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
+  // Hide immediately; waiting for transitionend can feel laggy on slower devices.
+  el.style.display = 'none';
   document.removeEventListener('keydown', handleEscKey);
 }
 
@@ -399,6 +859,19 @@ function handleEscKey(e) {
   if (e.key === 'Escape') {
     closePinModal();
     closeImportModal();
+    closeGalleryModal();
+    closeLightboxModal();
+    return;
+  }
+
+  if (e.key === 'ArrowRight' && isModalOpen('lightboxModal')) {
+    e.preventDefault();
+    showNextLightboxImage();
+  }
+
+  if (e.key === 'ArrowLeft' && isModalOpen('lightboxModal')) {
+    e.preventDefault();
+    showPreviousLightboxImage();
   }
 }
 
@@ -408,9 +881,24 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
     if (e.target === overlay) {
       closePinModal();
       closeImportModal();
+      closeGalleryModal();
+      closeLightboxModal();
     }
   });
 });
+
+const lightboxModalEl = document.getElementById('lightboxModal');
+if (lightboxModalEl) {
+  lightboxModalEl.addEventListener('wheel', (e) => {
+    if (!isModalOpen('lightboxModal') || state.lightboxImages.length < 2) return;
+    e.preventDefault();
+    if (e.deltaY > 0) {
+      showNextLightboxImage();
+    } else if (e.deltaY < 0) {
+      showPreviousLightboxImage();
+    }
+  }, { passive: false });
+}
 
 // ─── Toast ────────────────────────────────────────────────────
 let toastTimer;
@@ -430,5 +918,57 @@ function escapeHTML(str) {
   return d.innerHTML;
 }
 
+function normalizeImageURL(url) {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function parseImageURLList(raw) {
+  if (!raw) return [];
+  const text = String(raw).trim();
+
+  // Handle concatenated URLs with no separators, e.g. "...jpghttp://..."
+  // by splitting at each protocol boundary.
+  const protocolChunks = text.match(/https?:\/\/[\s\S]*?(?=https?:\/\/|$)/gi) || [];
+
+  const candidates = protocolChunks.length
+    ? protocolChunks
+    : text.split(/[\n,\s]+/);
+
+  const normalized = candidates
+    .map((item) => normalizeImageURL(String(item).trim()))
+    .filter(Boolean);
+
+  return dedupeStrings(normalized);
+}
+
+function dedupeStrings(values) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      out.push(value);
+    }
+  }
+  return out;
+}
+
+function getPinImages(pin) {
+  if (Array.isArray(pin.image_urls) && pin.image_urls.length) {
+    return dedupeStrings(pin.image_urls.map((u) => normalizeImageURL(u)).filter(Boolean));
+  }
+  return parseImageURLList(pin.image_url || '');
+}
+
 // ─── Kick-off ─────────────────────────────────────────────────
+initSearchInput();
 loadPins();

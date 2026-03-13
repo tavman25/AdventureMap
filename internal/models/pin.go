@@ -7,6 +7,7 @@ type Pin struct {
 	ID          int64     `json:"id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
+	ImageURL    string    `json:"image_url"`
 	Latitude    float64   `json:"latitude"`
 	Longitude   float64   `json:"longitude"`
 	Color       string    `json:"color"`        // hex color e.g. "#FF5722"

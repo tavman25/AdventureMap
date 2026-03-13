@@ -1,11 +1,16 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	"travel-map/internal/database"
 	"travel-map/internal/models"
@@ -154,6 +159,7 @@ func (h *Handler) ImportGoogleMaps(c *gin.Context) {
 			if date, ok := f.Properties["Published"].(string); ok {
 				p.VisitedAt = date
 			}
+			p.ImageURL = extractImageURL(f.Properties)
 			pins = append(pins, p)
 		}
 	} else {
@@ -182,6 +188,7 @@ func (h *Handler) ImportGoogleMaps(c *gin.Context) {
 			if addr, ok := item["address"].(string); ok {
 				p.Description = addr
 			}
+			p.ImageURL = extractImageURL(item)
 			pins = append(pins, p)
 		}
 	}
@@ -199,6 +206,120 @@ func (h *Handler) ImportGoogleMaps(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message":  fmt.Sprintf("Successfully imported %d pins", count),
 		"imported": count,
+	})
+}
+
+// ImportPinPhotos ingests photo URLs and applies them to existing pins.
+// Supported JSON format (array):
+// [{"id":1,"image_url":"https://..."}, {"title":"Rome","image_url":"https://..."}]
+func (h *Handler) ImportPinPhotos(c *gin.Context) {
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 10<<20)) // 10MB limit
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		return
+	}
+
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(body, &rows); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON: expected an array of objects"})
+		return
+	}
+	if len(rows) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empty import payload"})
+		return
+	}
+
+	updated := 0
+	skipped := 0
+	for _, row := range rows {
+		imageURL := strings.TrimSpace(extractImageURL(row))
+		if imageURL == "" {
+			skipped++
+			continue
+		}
+
+		if idVal, ok := row["id"]; ok {
+			if id, ok := toInt64(idVal); ok && id > 0 {
+				okUpdated, err := h.DB.UpdatePinImageByID(id, imageURL)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+					return
+				}
+				if okUpdated {
+					updated++
+				} else {
+					skipped++
+				}
+				continue
+			}
+		}
+
+		title := strings.TrimSpace(toString(row["title"]))
+		if title == "" {
+			skipped++
+			continue
+		}
+		affected, err := h.DB.UpdatePinImageByTitle(title, imageURL)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if affected > 0 {
+			updated += int(affected)
+		} else {
+			skipped++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("Imported photos for %d pin(s)", updated),
+		"updated": updated,
+		"skipped": skipped,
+	})
+}
+
+// UploadImage stores an uploaded image file and returns a URL that can be used in pins.
+func (h *Handler) UploadImage(c *gin.Context) {
+	file, err := c.FormFile("image")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing image file"})
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	allowed := map[string]bool{
+		".jpg":  true,
+		".jpeg": true,
+		".png":  true,
+		".webp": true,
+		".gif":  true,
+	}
+	if !allowed[ext] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported file type; use jpg, png, webp, or gif"})
+		return
+	}
+
+	if err := os.MkdirAll("./data/uploads", 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to prepare upload directory"})
+		return
+	}
+
+	randPart := make([]byte, 8)
+	if _, err := rand.Read(randPart); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate file name"})
+		return
+	}
+	fileName := fmt.Sprintf("%d-%x%s", time.Now().Unix(), randPart, ext)
+	savePath := filepath.Join("./data/uploads", fileName)
+
+	if err := c.SaveUploadedFile(file, savePath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save image"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "image uploaded",
+		"url":     "/uploads/" + fileName,
 	})
 }
 
@@ -222,4 +343,41 @@ func extractLatLon(item map[string]interface{}) (float64, float64) {
 		}
 	}
 	return 0, 0
+}
+
+func extractImageURL(item map[string]interface{}) string {
+	keys := []string{"image_url", "photo_url", "image", "photo", "url", "thumbnail"}
+	for _, k := range keys {
+		if val, ok := item[k]; ok {
+			s := strings.TrimSpace(toString(val))
+			if strings.HasPrefix(strings.ToLower(s), "http://") || strings.HasPrefix(strings.ToLower(s), "https://") {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func toString(v interface{}) string {
+	s, _ := v.(string)
+	return s
+}
+
+func toInt64(v interface{}) (int64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return int64(x), true
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case string:
+		id, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return id, true
+	default:
+		return 0, false
+	}
 }
